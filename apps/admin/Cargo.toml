@@ -1,0 +1,17 @@
+[package]
+name = "basingamarket-admin"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+basingamarket-chain = { path = "../../crates/chain" }
+basingamarket-protocol-events = { path = "../../crates/protocol-events" }
+basingamarket-db = { path = "../../crates/db" }
+basingamarket-domain = { path = "../../crates/domain" }
+basingamarket-observability = { path = "../../crates/observability" }
+basingamarket-market-data = { path = "../../crates/market-data" }
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true

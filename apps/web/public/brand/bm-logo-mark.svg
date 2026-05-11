@@ -1,0 +1,15 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="BM logo mark">
+  <g stroke="#F8FAFC" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M29 25V103" />
+    <path d="M29 25H58C70 25 78 32 78 43C78 54 70 61 58 61H29" />
+    <path d="M29 61H61C74 61 83 69 83 82C83 95 74 103 61 103H29" />
+    <path d="M74 36L94 63L114 36V103" />
+  </g>
+  <g fill="#F8FAFC">
+    <rect x="19" y="15" width="21" height="21" rx="7" />
+    <rect x="19" y="92" width="21" height="21" rx="7" />
+    <rect x="104" y="25" width="21" height="21" rx="7" />
+    <rect x="104" y="92" width="21" height="21" rx="7" />
+    <circle cx="94" cy="63" r="8" />
+  </g>
+</svg>

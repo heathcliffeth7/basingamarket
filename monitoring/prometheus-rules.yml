@@ -1,0 +1,31 @@
+groups:
+  - name: basingamarket
+    rules:
+      - alert: IndexerLagHigh
+        expr: indexer_lag_blocks > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer is behind the safe chain head"
+      - alert: RpcFallbackActive
+        expr: increase(rpc_fallback_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Indexer is using fallback RPC"
+      - alert: RenderFailures
+        expr: increase(render_failures_total[10m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Renderer jobs are failing"
+      - alert: NatsPublishFailures
+        expr: increase(nats_publish_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NATS publish failures may require outbox replay"

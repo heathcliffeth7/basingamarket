@@ -1,0 +1,13 @@
+[package]
+name = "basingamarket-auth"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+jsonwebtoken.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+p256.workspace = true

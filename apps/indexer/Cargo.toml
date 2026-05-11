@@ -1,0 +1,17 @@
+[package]
+name = "basingamarket-indexer"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+basingamarket-chain = { path = "../../crates/chain" }
+basingamarket-protocol-events = { path = "../../crates/protocol-events" }
+basingamarket-db = { path = "../../crates/db" }
+basingamarket-observability = { path = "../../crates/observability" }
+basingamarket-realtime = { path = "../../crates/realtime" }
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true

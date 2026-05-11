@@ -1,0 +1,165 @@
+@import 'tailwindcss';
+
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --bg: #13181d;
+  --bg-panel: #1b2228;
+  --bg-panel-strong: #202a31;
+  --bg-elevated: #11171c;
+  --line: rgba(148, 163, 184, 0.13);
+  --line-strong: rgba(148, 163, 184, 0.20);
+  --text: #f8fafc;
+  --text-muted: #9ca3af;
+  --text-soft: #dbeafe;
+  --positive: #1995ff;
+  --negative: #ef4444;
+  --neutral: #00c4ff;
+  --warning: #f59e0b;
+  --euphoric: #818cf8;
+  --lime: #00c4ff;
+  --success: #10b981;
+  --focus: #93c5fd;
+  --radius: 14px;
+  --shadow-market: 0 12px 36px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --shadow-glow-green: 0 0 0 1px rgba(25, 149, 255, 0.28), 0 0 28px rgba(25, 149, 255, 0.10);
+  --shadow-glow-amber: 0 0 0 1px rgba(245, 158, 11, 0.32), 0 0 30px rgba(245, 158, 11, 0.10);
+}
+
+@theme {
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono:
+    "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --color-terminal-bg: var(--bg);
+  --color-terminal-panel: var(--bg-panel);
+  --color-terminal-panel-strong: var(--bg-panel-strong);
+  --color-terminal-elevated: var(--bg-elevated);
+  --color-terminal-line: var(--line);
+  --color-terminal-line-strong: var(--line-strong);
+  --color-terminal-text: var(--text);
+  --color-terminal-muted: var(--text-muted);
+  --color-market-positive: var(--positive);
+  --color-market-negative: var(--negative);
+  --color-market-neutral: var(--neutral);
+  --color-market-warning: var(--warning);
+  --color-market-euphoric: var(--euphoric);
+  --color-market-lime: var(--lime);
+  --color-market-success: var(--success);
+}
+
+* {
+  box-sizing: border-box;
+  letter-spacing: 0 !important;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  overflow-x: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.terminal-shell {
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.terminal-panel {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-market);
+}
+
+.mono-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.app-glass {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(27, 34, 40, 0.88);
+  box-shadow: var(--shadow-market);
+}
+
+.app-icon {
+  display: block;
+  object-fit: contain;
+}
+
+.app-pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(23, 25, 35, 0.92);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.asset-price-motion,
+.asset-price-dot-motion {
+  transition:
+    d 140ms ease-out,
+    cx 140ms ease-out,
+    cy 140ms ease-out,
+    transform 140ms ease-out,
+    filter 140ms ease-out;
+}
+
+.price-number-flow,
+.price-delta-flow number-flow-react {
+  --number-flow-mask-height: 0.16em;
+  --number-flow-mask-width: 0.24em;
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  line-height: 0.9;
+  transition: color 120ms ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

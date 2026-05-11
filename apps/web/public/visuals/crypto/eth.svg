@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Ethereum">
+  <circle cx="48" cy="48" r="44" fill="#627eea"/>
+  <path fill="#fff" fill-opacity=".92" d="M48 12 27 48.7 48 61.2l21-12.5L48 12Z"/>
+  <path fill="#d7defd" d="M48 12v49.2l21-12.5L48 12Z"/>
+  <path fill="#fff" fill-opacity=".92" d="M48 65.2 27 52.8 48 84l21-31.2-21 12.4Z"/>
+  <path fill="#d7defd" d="M48 84V65.2l21-12.4L48 84Z"/>
+</svg>

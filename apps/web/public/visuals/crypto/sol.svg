@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Solana">
+  <rect width="96" height="96" rx="8" fill="#000"/>
+  <defs>
+    <linearGradient id="solTop" x1="18" x2="78" y1="29" y2="18" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8b5cf6"/>
+      <stop offset=".45" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#22f5a7"/>
+    </linearGradient>
+    <linearGradient id="solMid" x1="18" x2="78" y1="49" y2="41" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8b5cf6"/>
+      <stop offset=".55" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient>
+    <linearGradient id="solBot" x1="18" x2="78" y1="69" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9945ff"/>
+      <stop offset=".52" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#solTop)" d="M26 24.5h50.5c2.2 0 3.3 2.6 1.7 4.1L68.6 38a5.5 5.5 0 0 1-3.8 1.5H14.3c-2.2 0-3.3-2.6-1.7-4.1l9.6-9.4a5.5 5.5 0 0 1 3.8-1.5Z"/>
+  <path fill="url(#solMid)" d="M14.3 43.2h50.5a5.5 5.5 0 0 1 3.8 1.5l9.6 9.4c1.6 1.5.5 4.1-1.7 4.1H26a5.5 5.5 0 0 1-3.8-1.5l-9.6-9.4c-1.6-1.5-.5-4.1 1.7-4.1Z"/>
+  <path fill="url(#solBot)" d="M26 62h50.5c2.2 0 3.3 2.6 1.7 4.1l-9.6 9.4a5.5 5.5 0 0 1-3.8 1.5H14.3c-2.2 0-3.3-2.6-1.7-4.1l9.6-9.4A5.5 5.5 0 0 1 26 62Z"/>
+</svg>

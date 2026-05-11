@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.codex/
+.dev/
+apps/web/.env.local
+apps/web/.env.*.local
+apps/web/.next/
+apps/web/build/
+apps/web/node_modules/
+apps/web/test-results/
+apps/web/tsconfig.tsbuildinfo
+docs/roadmap/
+target/
+tmp/

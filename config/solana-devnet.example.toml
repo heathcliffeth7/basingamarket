@@ -1,0 +1,6 @@
+[solana]
+cluster = "devnet"
+rpc_url = "https://api.devnet.solana.com"
+ws_url = "wss://api.devnet.solana.com"
+program_id = ""
+request_timeout_ms = 10000

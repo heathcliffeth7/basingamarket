@@ -1,0 +1,16 @@
+[toolchain]
+package_manager = "npm"
+
+[features]
+seeds = true
+skip-lint = false
+
+[programs.devnet]
+basingamarket = "3oAve8qsR5oVtqUcsXtSELBVz5CnJifj4UCvM6AiHa2r"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "cargo test --workspace"
