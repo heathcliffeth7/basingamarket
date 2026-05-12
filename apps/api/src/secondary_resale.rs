@@ -449,7 +449,7 @@ async fn execute_buy_listing_internal(
     if recorded {
         state.persist_cash_projection().await?;
     }
-    invalidate_market_cache(&state, context.market_id).await;
+    invalidate_market_cache(state, context.market_id).await;
 
     Ok(BuyListingExecution {
         ticket_id,
@@ -702,16 +702,16 @@ pub(crate) async fn instant_sell(
     }
     invalidate_market_cache(&state, context.market_id).await;
 
-    Ok(Json(resale_response(
-        if sold_all { "sold" } else { "partially_sold" },
+    Ok(Json(resale_response(ResaleResponseInput {
+        status: if sold_all { "sold" } else { "partially_sold" },
         ticket_id,
         buyer_lot_id,
         signature,
         gross_usdc,
         fees,
-        seller_balance.cash_balance,
-        buyer_balance.cash_balance,
-    )))
+        seller_cash_balance: seller_balance.cash_balance,
+        buyer_cash_balance: buyer_balance.cash_balance,
+    })))
 }
 
 fn submit_secondary_resale(
@@ -1256,7 +1256,7 @@ fn resale_fees(
     })
 }
 
-fn resale_response(
+struct ResaleResponseInput {
     status: &'static str,
     ticket_id: u64,
     buyer_lot_id: Option<u64>,
@@ -1265,19 +1265,21 @@ fn resale_response(
     fees: ResaleFees,
     seller_cash_balance: u128,
     buyer_cash_balance: u128,
-) -> CashResaleResponse {
+}
+
+fn resale_response(input: ResaleResponseInput) -> CashResaleResponse {
     CashResaleResponse {
-        status,
-        ticket_id: ticket_id.to_string(),
-        buyer_lot_id: buyer_lot_id.map(|value| value.to_string()),
-        explorer_url: solana_explorer_tx_url(&signature),
-        signature,
-        gross_usdc: gross_usdc.to_string(),
-        seller_receives: fees.seller_receives.to_string(),
-        resale_fee: fees.resale_fee.to_string(),
-        early_flip_fee: fees.early_flip_fee.to_string(),
-        seller_cash_balance: seller_cash_balance.to_string(),
-        buyer_cash_balance: buyer_cash_balance.to_string(),
+        status: input.status,
+        ticket_id: input.ticket_id.to_string(),
+        buyer_lot_id: input.buyer_lot_id.map(|value| value.to_string()),
+        explorer_url: solana_explorer_tx_url(&input.signature),
+        signature: input.signature,
+        gross_usdc: input.gross_usdc.to_string(),
+        seller_receives: input.fees.seller_receives.to_string(),
+        resale_fee: input.fees.resale_fee.to_string(),
+        early_flip_fee: input.fees.early_flip_fee.to_string(),
+        seller_cash_balance: input.seller_cash_balance.to_string(),
+        buyer_cash_balance: input.buyer_cash_balance.to_string(),
     }
 }
 

@@ -565,7 +565,7 @@ async fn get_market_tickets(
         .filter(|ticket| {
             query
                 .round_id
-                .map_or(true, |round_id| ticket.round_id == round_id)
+                .is_none_or(|round_id| ticket.round_id == round_id)
         })
         .map(|ticket| TicketResponse::from_row(ticket, price_header.as_ref(), Some(&market)))
         .collect();

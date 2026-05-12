@@ -186,9 +186,11 @@ async fn post_buy_intent(rpc_url: String) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn chain_status_reports_solana_devnet_readiness_shape() {
-    let mut chain_config = SolanaDevnetConfig::default();
-    chain_config.rpc_url = "http://127.0.0.1:9".to_owned();
-    chain_config.request_timeout_ms = 1;
+    let chain_config = SolanaDevnetConfig {
+        rpc_url: "http://127.0.0.1:9".to_owned(),
+        request_timeout_ms: 1,
+        ..Default::default()
+    };
     let state = app_state().with_chain_config(chain_config);
     let response = build_router(state)
         .oneshot(

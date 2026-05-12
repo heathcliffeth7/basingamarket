@@ -969,11 +969,9 @@ async fn projected_fresh_price(
 fn projected_curve_price(volume: u128) -> u128 {
     let virtual_usdc = DEFAULT_VIRTUAL_USDC.saturating_add(volume);
     let k = DEFAULT_VIRTUAL_USDC.saturating_mul(DEFAULT_VIRTUAL_TICKET);
-    let virtual_ticket = if virtual_usdc == 0 {
-        DEFAULT_VIRTUAL_TICKET
-    } else {
-        k / virtual_usdc
-    };
+    let virtual_ticket = k
+        .checked_div(virtual_usdc)
+        .unwrap_or(DEFAULT_VIRTUAL_TICKET);
     if virtual_ticket == 0 {
         return 0;
     }

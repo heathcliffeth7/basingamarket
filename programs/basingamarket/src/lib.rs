@@ -237,13 +237,15 @@ pub mod basingamarket {
         let lot = &mut ctx.accounts.position_lot;
         init_lot(
             lot,
-            args.lot_id,
-            ctx.accounts.round.key(),
-            ctx.accounts.opening_order.side,
-            ctx.accounts.user.key(),
-            tickets,
-            ctx.accounts.opening_order.net_usdc,
-            Clock::get()?.unix_timestamp,
+            InitLotInput {
+                lot_id: args.lot_id,
+                round: ctx.accounts.round.key(),
+                side: ctx.accounts.opening_order.side,
+                owner: ctx.accounts.user.key(),
+                ticket_amount: tickets,
+                usdc_in: ctx.accounts.opening_order.net_usdc,
+                now: Clock::get()?.unix_timestamp,
+            },
         )?;
         ctx.accounts.opening_order.claimed = true;
         Ok(())
@@ -373,19 +375,19 @@ pub mod basingamarket {
         );
 
         let now = Clock::get()?.unix_timestamp;
-        execute_secondary_fee_transfers(
-            &mut ctx.accounts.global_config,
-            &mut ctx.accounts.round,
-            &ctx.accounts.usdc_mint,
-            &ctx.accounts.cash_vault,
-            &ctx.accounts.round_vault,
-            &ctx.accounts.fee_vault,
-            &ctx.accounts.cashier,
-            &ctx.accounts.token_program,
+        execute_secondary_fee_transfers(SecondaryFeeTransferExecution {
+            global_config: &mut ctx.accounts.global_config,
+            round: &mut ctx.accounts.round,
+            usdc_mint: &ctx.accounts.usdc_mint,
+            cash_vault: &ctx.accounts.cash_vault,
+            round_vault: &ctx.accounts.round_vault,
+            fee_vault: &ctx.accounts.fee_vault,
+            cashier: &ctx.accounts.cashier,
+            token_program: &ctx.accounts.token_program,
             gross_usdc,
-            ctx.accounts.position_lot.last_transfer_at,
+            last_transfer_at: ctx.accounts.position_lot.last_transfer_at,
             now,
-        )?;
+        })?;
 
         let lot = &mut ctx.accounts.position_lot;
         lot.current_owner = args.buyer_wallet;
@@ -426,19 +428,19 @@ pub mod basingamarket {
         );
 
         let now = Clock::get()?.unix_timestamp;
-        execute_secondary_fee_transfers(
-            &mut ctx.accounts.global_config,
-            &mut ctx.accounts.round,
-            &ctx.accounts.usdc_mint,
-            &ctx.accounts.cash_vault,
-            &ctx.accounts.round_vault,
-            &ctx.accounts.fee_vault,
-            &ctx.accounts.cashier,
-            &ctx.accounts.token_program,
-            args.gross_usdc,
-            ctx.accounts.seller_lot.last_transfer_at,
+        execute_secondary_fee_transfers(SecondaryFeeTransferExecution {
+            global_config: &mut ctx.accounts.global_config,
+            round: &mut ctx.accounts.round,
+            usdc_mint: &ctx.accounts.usdc_mint,
+            cash_vault: &ctx.accounts.cash_vault,
+            round_vault: &ctx.accounts.round_vault,
+            fee_vault: &ctx.accounts.fee_vault,
+            cashier: &ctx.accounts.cashier,
+            token_program: &ctx.accounts.token_program,
+            gross_usdc: args.gross_usdc,
+            last_transfer_at: ctx.accounts.seller_lot.last_transfer_at,
             now,
-        )?;
+        })?;
 
         let sold_all = args.tickets_to_sell == ctx.accounts.seller_lot.ticket_amount;
         if sold_all {

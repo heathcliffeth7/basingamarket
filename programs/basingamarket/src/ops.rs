@@ -27,6 +27,16 @@ pub(crate) struct FreshBuyExecution<'a, 'info> {
     pub(crate) min_tickets_out: u64,
 }
 
+pub(crate) struct InitLotInput {
+    pub(crate) lot_id: u64,
+    pub(crate) round: Pubkey,
+    pub(crate) side: Side,
+    pub(crate) owner: Pubkey,
+    pub(crate) ticket_amount: u64,
+    pub(crate) usdc_in: u64,
+    pub(crate) now: i64,
+}
+
 pub(crate) fn execute_fresh_buy(ctx: FreshBuyExecution<'_, '_>) -> Result<()> {
     crate::require_not_paused(ctx.global_config)?;
     crate::require_live_trading(ctx.round)?;
@@ -79,13 +89,15 @@ pub(crate) fn execute_fresh_buy(ctx: FreshBuyExecution<'_, '_>) -> Result<()> {
 
     init_lot(
         ctx.position_lot,
-        ctx.lot_id,
-        ctx.round.key(),
-        ctx.side,
-        ctx.position_owner,
-        tickets_out,
-        net_usdc,
-        Clock::get()?.unix_timestamp,
+        InitLotInput {
+            lot_id: ctx.lot_id,
+            round: ctx.round.key(),
+            side: ctx.side,
+            owner: ctx.position_owner,
+            ticket_amount: tickets_out,
+            usdc_in: net_usdc,
+            now: Clock::get()?.unix_timestamp,
+        },
     )
 }
 
@@ -102,28 +114,19 @@ pub(crate) fn init_aggregate(
     Ok(())
 }
 
-pub(crate) fn init_lot(
-    lot: &mut PositionLot,
-    lot_id: u64,
-    round: Pubkey,
-    side: Side,
-    owner: Pubkey,
-    ticket_amount: u64,
-    usdc_in: u64,
-    now: i64,
-) -> Result<()> {
-    lot.lot_id = lot_id;
-    lot.round = round;
-    lot.side = side;
-    lot.current_owner = owner;
-    lot.original_buyer = owner;
-    lot.ticket_amount = ticket_amount;
-    lot.usdc_in = usdc_in;
-    lot.avg_entry_price = mul_div(usdc_in, SCALE as u64, ticket_amount)?;
+pub(crate) fn init_lot(lot: &mut PositionLot, input: InitLotInput) -> Result<()> {
+    lot.lot_id = input.lot_id;
+    lot.round = input.round;
+    lot.side = input.side;
+    lot.current_owner = input.owner;
+    lot.original_buyer = input.owner;
+    lot.ticket_amount = input.ticket_amount;
+    lot.usdc_in = input.usdc_in;
+    lot.avg_entry_price = mul_div(input.usdc_in, SCALE as u64, input.ticket_amount)?;
     lot.listed = false;
     lot.listed_price = 0;
-    lot.created_at = now;
-    lot.last_transfer_at = now;
+    lot.created_at = input.now;
+    lot.last_transfer_at = input.now;
     lot.claimed = false;
     Ok(())
 }
@@ -177,53 +180,60 @@ pub(crate) fn listing_total_price(lot: &PositionLot) -> Result<u64> {
     mul_div(lot.ticket_amount, lot.listed_price, SCALE as u64)
 }
 
-pub(crate) fn execute_secondary_fee_transfers<'info>(
-    global_config: &mut Account<'info, GlobalConfig>,
-    round: &mut Account<'info, Round>,
-    usdc_mint: &Account<'info, Mint>,
-    cash_vault: &Account<'info, TokenAccount>,
-    round_vault: &Account<'info, TokenAccount>,
-    fee_vault: &Account<'info, TokenAccount>,
-    cashier: &Signer<'info>,
-    token_program: &Program<'info, Token>,
-    gross_usdc: u64,
-    last_transfer_at: i64,
-    now: i64,
-) -> Result<()> {
-    require!(gross_usdc > 0, BasingamarketError::ZeroAmount);
-    require!(usdc_mint.decimals == 6, BasingamarketError::InvalidUsdcMint);
-    require_token_account(cash_vault, usdc_mint.key(), cashier.key())?;
-    require_token_account(round_vault, usdc_mint.key(), round.key())?;
-    require_token_account(fee_vault, usdc_mint.key(), global_config.key())?;
+pub(crate) struct SecondaryFeeTransferExecution<'a, 'info> {
+    pub(crate) global_config: &'a mut Account<'info, GlobalConfig>,
+    pub(crate) round: &'a mut Account<'info, Round>,
+    pub(crate) usdc_mint: &'a Account<'info, Mint>,
+    pub(crate) cash_vault: &'a Account<'info, TokenAccount>,
+    pub(crate) round_vault: &'a Account<'info, TokenAccount>,
+    pub(crate) fee_vault: &'a Account<'info, TokenAccount>,
+    pub(crate) cashier: &'a Signer<'info>,
+    pub(crate) token_program: &'a Program<'info, Token>,
+    pub(crate) gross_usdc: u64,
+    pub(crate) last_transfer_at: i64,
+    pub(crate) now: i64,
+}
 
-    let resale_fee = fee_amount(gross_usdc, global_config.resale_fee_bps)?;
-    let early_fee = early_flip_fee(gross_usdc, now.saturating_sub(last_transfer_at))?;
-    let _seller_receives = checked_sub(checked_sub(gross_usdc, resale_fee)?, early_fee)?;
+pub(crate) fn execute_secondary_fee_transfers(
+    ctx: SecondaryFeeTransferExecution<'_, '_>,
+) -> Result<()> {
+    require!(ctx.gross_usdc > 0, BasingamarketError::ZeroAmount);
+    require!(
+        ctx.usdc_mint.decimals == 6,
+        BasingamarketError::InvalidUsdcMint
+    );
+    require_token_account(ctx.cash_vault, ctx.usdc_mint.key(), ctx.cashier.key())?;
+    require_token_account(ctx.round_vault, ctx.usdc_mint.key(), ctx.round.key())?;
+    require_token_account(ctx.fee_vault, ctx.usdc_mint.key(), ctx.global_config.key())?;
+
+    let resale_fee = fee_amount(ctx.gross_usdc, ctx.global_config.resale_fee_bps)?;
+    let early_fee = early_flip_fee(ctx.gross_usdc, ctx.now.saturating_sub(ctx.last_transfer_at))?;
+    let _seller_receives = checked_sub(checked_sub(ctx.gross_usdc, resale_fee)?, early_fee)?;
 
     if resale_fee > 0 {
         transfer_checked(
-            cash_vault,
-            usdc_mint,
-            fee_vault,
-            cashier,
-            token_program,
+            ctx.cash_vault,
+            ctx.usdc_mint,
+            ctx.fee_vault,
+            ctx.cashier,
+            ctx.token_program,
             resale_fee,
         )?;
     }
     if early_fee > 0 {
         transfer_checked(
-            cash_vault,
-            usdc_mint,
-            round_vault,
-            cashier,
-            token_program,
+            ctx.cash_vault,
+            ctx.usdc_mint,
+            ctx.round_vault,
+            ctx.cashier,
+            ctx.token_program,
             early_fee,
         )?;
     }
 
-    global_config.protocol_fee_accrued_usdc =
-        checked_add(global_config.protocol_fee_accrued_usdc, resale_fee)?;
-    round.round_bonus_usdc = checked_add(round.round_bonus_usdc, early_fee)?;
+    ctx.global_config.protocol_fee_accrued_usdc =
+        checked_add(ctx.global_config.protocol_fee_accrued_usdc, resale_fee)?;
+    ctx.round.round_bonus_usdc = checked_add(ctx.round.round_bonus_usdc, early_fee)?;
     Ok(())
 }
 

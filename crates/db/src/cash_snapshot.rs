@@ -37,6 +37,146 @@ pub struct CashProjectionSnapshot {
     pub cash_withdrawals: Vec<CashWithdrawalRow>,
 }
 
+impl InMemoryProjectionStore {
+    pub async fn cash_projection_snapshot(&self) -> CashProjectionSnapshot {
+        let state = self.state.read().await;
+        CashProjectionSnapshot {
+            version: CASH_PROJECTION_SNAPSHOT_VERSION,
+            cash_balances: state.cash_balances.values().cloned().collect(),
+            busdc_mints: state.busdc_mints.values().cloned().collect(),
+            cash_trade_reservations: state.cash_trade_reservations.values().cloned().collect(),
+            cash_trades: state.cash_trades.values().cloned().collect(),
+            cash_bids: state.cash_bids.values().cloned().collect(),
+            cash_resales: state.cash_resales.values().cloned().collect(),
+            payout_claims: state.payout_claims.values().cloned().collect(),
+            cash_deposits: state.cash_deposits.values().cloned().collect(),
+            sol_deposit_quotes: state.sol_deposit_quotes.values().cloned().collect(),
+            sol_deposits: state.sol_deposits.values().cloned().collect(),
+            transfer_deposit_quotes: state.transfer_deposit_quotes.values().cloned().collect(),
+            transfer_deposits: state.transfer_deposits.values().cloned().collect(),
+            cash_withdrawal_quotes: state.cash_withdrawal_quotes.values().cloned().collect(),
+            cash_withdrawals: state.cash_withdrawals.values().cloned().collect(),
+        }
+    }
+
+    pub async fn replace_cash_projection_snapshot(
+        &self,
+        snapshot: CashProjectionSnapshot,
+    ) -> Result<(), DbError> {
+        let mut state = self.state.write().await;
+        state.cash_balances = snapshot
+            .cash_balances
+            .into_iter()
+            .map(|row| (row.wallet_address.clone(), row))
+            .collect();
+        state.busdc_mints = snapshot
+            .busdc_mints
+            .into_iter()
+            .map(|row| (row.mint_id.clone(), row))
+            .collect();
+        state.cash_trade_reservations = snapshot
+            .cash_trade_reservations
+            .into_iter()
+            .map(|row| (row.trade_id.clone(), row))
+            .collect();
+        state.cash_trades = snapshot
+            .cash_trades
+            .into_iter()
+            .map(|row| (row.signature.clone(), row))
+            .collect();
+        state.cash_bids = snapshot
+            .cash_bids
+            .into_iter()
+            .map(|row| (row.bid_id.clone(), row))
+            .collect();
+        state.cash_resales = snapshot
+            .cash_resales
+            .into_iter()
+            .map(|row| (row.signature.clone(), row))
+            .collect();
+        state.payout_claims = snapshot
+            .payout_claims
+            .into_iter()
+            .map(|row| (row.ticket_id, row))
+            .collect();
+        state.cash_deposits = snapshot
+            .cash_deposits
+            .into_iter()
+            .map(|row| (row.signature.clone(), row))
+            .collect();
+        state.sol_deposit_quotes = snapshot
+            .sol_deposit_quotes
+            .into_iter()
+            .map(|row| (row.quote_id.clone(), row))
+            .collect();
+        state.sol_deposits = snapshot
+            .sol_deposits
+            .into_iter()
+            .map(|row| (row.signature.clone(), row))
+            .collect();
+        state.transfer_deposit_quotes = snapshot
+            .transfer_deposit_quotes
+            .into_iter()
+            .map(|row| (row.quote_id.clone(), row))
+            .collect();
+        state.transfer_deposits = snapshot
+            .transfer_deposits
+            .into_iter()
+            .map(|row| (row.signature.clone(), row))
+            .collect();
+        state.cash_withdrawal_quotes = snapshot
+            .cash_withdrawal_quotes
+            .into_iter()
+            .map(|row| (row.quote_id.clone(), row))
+            .collect();
+        state.cash_withdrawals = snapshot
+            .cash_withdrawals
+            .into_iter()
+            .map(|row| (row.vault_signature.clone(), row))
+            .collect();
+        rebuild_cash_ticket_projection_from_snapshot(&mut state)?;
+        Ok(())
+    }
+
+    pub async fn load_cash_projection_snapshot(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<bool, DbError> {
+        let bytes = match fs::read(path.as_ref()).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        let snapshot = serde_json::from_slice::<CashProjectionSnapshot>(&bytes)?;
+        self.replace_cash_projection_snapshot(snapshot).await?;
+        Ok(true)
+    }
+
+    pub async fn save_cash_projection_snapshot(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), DbError> {
+        let path = path.as_ref();
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).await?;
+        }
+
+        let snapshot = self.cash_projection_snapshot().await;
+        let bytes = serde_json::to_vec_pretty(&snapshot)?;
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| DbError::Projection("cash snapshot path has no file name".to_owned()))?;
+        let tmp_path = path.with_file_name(format!(".{file_name}.tmp"));
+        fs::write(&tmp_path, bytes).await?;
+        fs::rename(&tmp_path, path).await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,145 +513,5 @@ mod tests {
             store.cash_trade_side_volume(1, 5928349, "UP").await,
             995_000
         );
-    }
-}
-
-impl InMemoryProjectionStore {
-    pub async fn cash_projection_snapshot(&self) -> CashProjectionSnapshot {
-        let state = self.state.read().await;
-        CashProjectionSnapshot {
-            version: CASH_PROJECTION_SNAPSHOT_VERSION,
-            cash_balances: state.cash_balances.values().cloned().collect(),
-            busdc_mints: state.busdc_mints.values().cloned().collect(),
-            cash_trade_reservations: state.cash_trade_reservations.values().cloned().collect(),
-            cash_trades: state.cash_trades.values().cloned().collect(),
-            cash_bids: state.cash_bids.values().cloned().collect(),
-            cash_resales: state.cash_resales.values().cloned().collect(),
-            payout_claims: state.payout_claims.values().cloned().collect(),
-            cash_deposits: state.cash_deposits.values().cloned().collect(),
-            sol_deposit_quotes: state.sol_deposit_quotes.values().cloned().collect(),
-            sol_deposits: state.sol_deposits.values().cloned().collect(),
-            transfer_deposit_quotes: state.transfer_deposit_quotes.values().cloned().collect(),
-            transfer_deposits: state.transfer_deposits.values().cloned().collect(),
-            cash_withdrawal_quotes: state.cash_withdrawal_quotes.values().cloned().collect(),
-            cash_withdrawals: state.cash_withdrawals.values().cloned().collect(),
-        }
-    }
-
-    pub async fn replace_cash_projection_snapshot(
-        &self,
-        snapshot: CashProjectionSnapshot,
-    ) -> Result<(), DbError> {
-        let mut state = self.state.write().await;
-        state.cash_balances = snapshot
-            .cash_balances
-            .into_iter()
-            .map(|row| (row.wallet_address.clone(), row))
-            .collect();
-        state.busdc_mints = snapshot
-            .busdc_mints
-            .into_iter()
-            .map(|row| (row.mint_id.clone(), row))
-            .collect();
-        state.cash_trade_reservations = snapshot
-            .cash_trade_reservations
-            .into_iter()
-            .map(|row| (row.trade_id.clone(), row))
-            .collect();
-        state.cash_trades = snapshot
-            .cash_trades
-            .into_iter()
-            .map(|row| (row.signature.clone(), row))
-            .collect();
-        state.cash_bids = snapshot
-            .cash_bids
-            .into_iter()
-            .map(|row| (row.bid_id.clone(), row))
-            .collect();
-        state.cash_resales = snapshot
-            .cash_resales
-            .into_iter()
-            .map(|row| (row.signature.clone(), row))
-            .collect();
-        state.payout_claims = snapshot
-            .payout_claims
-            .into_iter()
-            .map(|row| (row.ticket_id, row))
-            .collect();
-        state.cash_deposits = snapshot
-            .cash_deposits
-            .into_iter()
-            .map(|row| (row.signature.clone(), row))
-            .collect();
-        state.sol_deposit_quotes = snapshot
-            .sol_deposit_quotes
-            .into_iter()
-            .map(|row| (row.quote_id.clone(), row))
-            .collect();
-        state.sol_deposits = snapshot
-            .sol_deposits
-            .into_iter()
-            .map(|row| (row.signature.clone(), row))
-            .collect();
-        state.transfer_deposit_quotes = snapshot
-            .transfer_deposit_quotes
-            .into_iter()
-            .map(|row| (row.quote_id.clone(), row))
-            .collect();
-        state.transfer_deposits = snapshot
-            .transfer_deposits
-            .into_iter()
-            .map(|row| (row.signature.clone(), row))
-            .collect();
-        state.cash_withdrawal_quotes = snapshot
-            .cash_withdrawal_quotes
-            .into_iter()
-            .map(|row| (row.quote_id.clone(), row))
-            .collect();
-        state.cash_withdrawals = snapshot
-            .cash_withdrawals
-            .into_iter()
-            .map(|row| (row.vault_signature.clone(), row))
-            .collect();
-        rebuild_cash_ticket_projection_from_snapshot(&mut state)?;
-        Ok(())
-    }
-
-    pub async fn load_cash_projection_snapshot(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> Result<bool, DbError> {
-        let bytes = match fs::read(path.as_ref()).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error.into()),
-        };
-        let snapshot = serde_json::from_slice::<CashProjectionSnapshot>(&bytes)?;
-        self.replace_cash_projection_snapshot(snapshot).await?;
-        Ok(true)
-    }
-
-    pub async fn save_cash_projection_snapshot(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> Result<(), DbError> {
-        let path = path.as_ref();
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).await?;
-        }
-
-        let snapshot = self.cash_projection_snapshot().await;
-        let bytes = serde_json::to_vec_pretty(&snapshot)?;
-        let file_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| DbError::Projection("cash snapshot path has no file name".to_owned()))?;
-        let tmp_path = path.with_file_name(format!(".{file_name}.tmp"));
-        fs::write(&tmp_path, bytes).await?;
-        fs::rename(&tmp_path, path).await?;
-        Ok(())
     }
 }
