@@ -164,6 +164,7 @@ impl ProjectionEngine {
             ProtocolEvent::TicketMinted {
                 ticket_id,
                 market_id,
+                round_id,
                 owner,
                 outcome_id,
                 stake_amount,
@@ -178,6 +179,7 @@ impl ProjectionEngine {
                         TicketRow {
                             ticket_id,
                             market_id,
+                            round_id,
                             outcome_id,
                             original_caller: owner.clone(),
                             current_owner: owner.clone(),
@@ -290,6 +292,7 @@ impl ProjectionEngine {
             ProtocolEvent::FreshBought {
                 lot_id,
                 market_id,
+                round_id,
                 owner,
                 side,
                 usdc_in,
@@ -300,6 +303,7 @@ impl ProjectionEngine {
             | ProtocolEvent::OpeningOrderClaimed {
                 lot_id,
                 market_id,
+                round_id,
                 owner,
                 side,
                 ticket_amount: tickets_out,
@@ -314,6 +318,7 @@ impl ProjectionEngine {
                         TicketRow {
                             ticket_id: lot_id,
                             market_id,
+                            round_id,
                             outcome_id,
                             original_caller: owner.clone(),
                             current_owner: owner.clone(),
@@ -447,18 +452,20 @@ impl ProjectionEngine {
                     }),
                 )])
             }
-            ProtocolEvent::RoundClosed { market_id, .. } => {
-                self.store.close_market(market_id, meta).await?;
-                Ok(vec![envelope(
-                    topics::MARKET_CLOSED,
-                    meta,
-                    Some(market_id),
-                    None,
-                    json!({
-                        "market_id": market_id,
-                    }),
-                )])
-            }
+            ProtocolEvent::RoundClosed {
+                market_id,
+                round_id,
+            } => Ok(vec![envelope(
+                topics::MARKET_UPDATED,
+                meta,
+                Some(market_id),
+                None,
+                json!({
+                    "market_id": market_id,
+                    "round_id": round_id,
+                    "status": "round_closed",
+                }),
+            )]),
             ProtocolEvent::MarketResolved {
                 market_id,
                 winning_outcome,
@@ -479,6 +486,7 @@ impl ProjectionEngine {
             }
             ProtocolEvent::RoundResolved {
                 market_id,
+                round_id,
                 winning_side,
                 settlement_vault,
                 payout_per_ticket,
@@ -487,7 +495,14 @@ impl ProjectionEngine {
             } => {
                 let winning_outcome = side_to_outcome_id(&winning_side)?;
                 self.store
-                    .resolve_market_with_payout(market_id, winning_outcome, payout_per_ticket, meta)
+                    .settle_round_tickets(
+                        market_id,
+                        round_id,
+                        Some(winning_outcome),
+                        Some(payout_per_ticket),
+                        Default::default(),
+                        projected_at(meta),
+                    )
                     .await?;
                 Ok(vec![envelope(
                     topics::MARKET_RESOLVED,
@@ -496,6 +511,7 @@ impl ProjectionEngine {
                     None,
                     json!({
                         "market_id": market_id,
+                        "round_id": round_id,
                         "winning_side": winning_side,
                         "settlement_vault": settlement_vault.to_string(),
                         "payout_per_ticket": payout_per_ticket.to_string(),
@@ -503,13 +519,21 @@ impl ProjectionEngine {
                     }),
                 )])
             }
-            ProtocolEvent::RoundVoided { market_id, .. } => {
-                let mut state = self.store.state.write().await;
-                if let Some(market) = state.markets.get_mut(&market_id) {
-                    market.status = MarketStatus::Cancelled;
-                    market.updated_at = projected_at(meta);
-                }
-                drop(state);
+            ProtocolEvent::RoundVoided {
+                market_id,
+                round_id,
+                ..
+            } => {
+                self.store
+                    .settle_round_tickets(
+                        market_id,
+                        round_id,
+                        None,
+                        None,
+                        Default::default(),
+                        projected_at(meta),
+                    )
+                    .await?;
                 Ok(vec![envelope(
                     topics::MARKET_RESOLVED,
                     meta,
@@ -517,6 +541,7 @@ impl ProjectionEngine {
                     None,
                     json!({
                         "market_id": market_id,
+                        "round_id": round_id,
                         "status": "voided",
                     }),
                 )])

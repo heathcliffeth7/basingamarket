@@ -14,9 +14,9 @@ export function formatTokenAmount(value: string | bigint | number | null | undef
 
 export function parseTokenAmountToBaseUnits(value: string, decimals = Number(TOKEN_DECIMALS)) {
   const trimmed = value.trim();
-  if (!/^\d+(\.\d+)?$/.test(trimmed)) return null;
+  if (!/^\d+([.,]\d+)?$/.test(trimmed)) return null;
 
-  const [whole, fraction = ''] = trimmed.split('.');
+  const [whole, fraction = ''] = trimmed.replace(',', '.').split('.');
   if (fraction.length > decimals) return null;
 
   const baseUnits = BigInt(whole) * 10n ** BigInt(decimals)

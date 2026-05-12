@@ -135,6 +135,19 @@ impl InMemoryProjectionStore {
             .collect()
     }
 
+    pub async fn get_tickets_for_profile(&self, wallet_address: &str) -> Vec<TicketRow> {
+        self.state
+            .read()
+            .await
+            .tickets
+            .values()
+            .filter(|ticket| {
+                ticket.current_owner == wallet_address || ticket.original_caller == wallet_address
+            })
+            .cloned()
+            .collect()
+    }
+
     pub async fn get_canvas(&self, market_id: u64) -> Vec<CanvasObjectRow> {
         let mut rows: Vec<_> = self
             .state
@@ -1131,17 +1144,6 @@ impl InMemoryProjectionStore {
             .await
     }
 
-    pub(crate) async fn resolve_market_with_payout(
-        &self,
-        market_id: u64,
-        winning_outcome: u8,
-        payout_per_ticket: u128,
-        meta: &EventMeta,
-    ) -> Result<(), DbError> {
-        self.resolve_market_inner(market_id, winning_outcome, Some(payout_per_ticket), meta)
-            .await
-    }
-
     async fn resolve_market_inner(
         &self,
         market_id: u64,
@@ -1233,6 +1235,7 @@ fn insert_ticket_for_cash_trade(
     let ticket = TicketRow {
         ticket_id: row.lot_id,
         market_id: row.market_id,
+        round_id: row.round_id,
         outcome_id,
         original_caller: row.wallet_address.clone(),
         current_owner: row.wallet_address.clone(),
@@ -1252,6 +1255,65 @@ fn insert_ticket_for_cash_trade(
     };
     insert_canvas_object(state, &ticket);
     state.tickets.insert(ticket.ticket_id, ticket);
+    Ok(())
+}
+
+pub(crate) fn rebuild_cash_ticket_projection_from_snapshot(
+    state: &mut ProjectionState,
+) -> Result<(), DbError> {
+    let mut cash_ticket_ids: HashSet<u64> =
+        state.cash_trades.values().map(|row| row.lot_id).collect();
+    cash_ticket_ids.extend(
+        state
+            .cash_resales
+            .values()
+            .filter_map(|row| row.buyer_lot_id),
+    );
+    for ticket_id in &cash_ticket_ids {
+        state.tickets.remove(ticket_id);
+    }
+    state
+        .canvas_objects
+        .retain(|(_, ticket_id), _| !cash_ticket_ids.contains(ticket_id));
+    state
+        .transfers
+        .retain(|row| !cash_ticket_ids.contains(&row.ticket_id));
+    state
+        .positions
+        .retain(|row| !cash_ticket_ids.contains(&row.ticket_id));
+
+    let mut cash_trades: Vec<_> = state.cash_trades.values().cloned().collect();
+    cash_trades.sort_by_key(|row| (row.created_at, row.lot_id));
+    for row in &cash_trades {
+        insert_ticket_for_cash_trade(state, row)?;
+    }
+
+    let mut cash_resales: Vec<_> = state.cash_resales.values().cloned().collect();
+    cash_resales.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.signature.cmp(&right.signature))
+    });
+    for row in &cash_resales {
+        apply_cash_resale_to_tickets(state, row)?;
+    }
+
+    for claim in state.payout_claims.values() {
+        if let Some(ticket) = state.tickets.get_mut(&claim.ticket_id) {
+            ticket.claimed = true;
+            ticket.status = TicketStatus::Claimed;
+            ticket.settlement_value_usdc = Some(claim.amount);
+            ticket.updated_at = claim.created_at;
+            if let Some(canvas) = state
+                .canvas_objects
+                .get_mut(&(ticket.market_id, ticket.ticket_id))
+            {
+                canvas.listed = false;
+                canvas.updated_at = claim.created_at;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1308,6 +1370,7 @@ fn apply_cash_resale_to_tickets(
         let new_ticket = TicketRow {
             ticket_id: buyer_lot_id,
             market_id: row.market_id,
+            round_id: row.round_id,
             outcome_id: ticket.outcome_id,
             original_caller: ticket.original_caller.clone(),
             current_owner: row.buyer_wallet.clone(),

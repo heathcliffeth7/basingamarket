@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSignMessage } from '@privy-io/react-auth/solana';
 import { Loader2, Send, Wallet, X } from 'lucide-react';
@@ -14,12 +14,15 @@ import { isSolanaPubkey } from '@/lib/utils/solana';
 
 type WithdrawButtonProps = {
   walletAddress: string;
+  renderTrigger?: (open: () => void, label: string) => ReactNode;
+  openRequest?: number;
 };
 
-export default function WithdrawButton({ walletAddress }: WithdrawButtonProps) {
+export default function WithdrawButton({ walletAddress, renderTrigger, openRequest = 0 }: WithdrawButtonProps) {
   const queryClient = useQueryClient();
   const { getAccessToken, solanaWallet, solanaWalletsReady, solanaWalletResolving } = useAuth();
   const { signMessage } = useSignMessage();
+  const lastOpenRequestRef = useRef(0);
   const [isOpen, setIsOpen] = useState(false);
   const [amount, setAmount] = useState('');
   const [destinationMode, setDestinationMode] = useState<'connected' | 'custom'>('connected');
@@ -97,6 +100,12 @@ export default function WithdrawButton({ walletAddress }: WithdrawButtonProps) {
     setIsOpen(true);
   }
 
+  useEffect(() => {
+    if (!openRequest || openRequest === lastOpenRequestRef.current) return;
+    lastOpenRequestRef.current = openRequest;
+    openWithdraw();
+  }, [openRequest]);
+
   function applyPercent(percent: number) {
     const next = (BigInt(cashBaseUnits) * BigInt(percent)) / 100n;
     if (next > 0n) setAmount(formatTokenAmount(next.toString()));
@@ -104,15 +113,19 @@ export default function WithdrawButton({ walletAddress }: WithdrawButtonProps) {
 
   return (
     <>
-      <button
-        type="button"
-        className="inline-flex h-8 items-center gap-2 rounded-full border border-terminal-line bg-terminal-panel px-3 text-xs font-black text-terminal-text transition hover:border-market-positive/60 hover:bg-terminal-panel-strong disabled:cursor-not-allowed disabled:text-terminal-muted"
-        aria-label="Withdraw"
-        disabled={configQuery.isLoading}
-        onClick={openWithdraw}
-      >
-        <Wallet size={14} /> {label}
-      </button>
+      {renderTrigger ? (
+        renderTrigger(openWithdraw, label)
+      ) : (
+        <button
+          type="button"
+          className="inline-flex h-8 items-center gap-2 rounded-full border border-terminal-line bg-terminal-panel px-3 text-xs font-black text-terminal-text transition hover:border-market-positive/60 hover:bg-terminal-panel-strong disabled:cursor-not-allowed disabled:text-terminal-muted"
+          aria-label="Withdraw"
+          disabled={configQuery.isLoading}
+          onClick={openWithdraw}
+        >
+          <Wallet size={14} /> {label}
+        </button>
+      )}
 
       {isOpen ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm" role="presentation">

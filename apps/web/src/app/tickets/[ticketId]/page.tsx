@@ -77,7 +77,7 @@ export default function TicketPage() {
             <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-terminal-line-strong pb-5">
               <div>
                 <p className="mono-label text-terminal-muted">position receipt</p>
-                <h1 className="mt-2 text-3xl font-black text-terminal-text">Ticket #{ticketId}</h1>
+                <h1 className="mt-2 text-3xl font-black text-terminal-text">{ticketQuery.data.token_name ? `${ticketQuery.data.token_name} #${ticketId}` : `Ticket #${ticketId}`}</h1>
                 <p className="mt-2 text-base text-terminal-muted">Outcome: <span className="font-black text-terminal-text">{outcomeLabel}</span></p>
               </div>
               <Badge tone={ticketQuery.data.status === 'listed' ? 'warning' : ticketQuery.data.status === 'won' ? 'success' : ticketQuery.data.status === 'lost' ? 'negative' : 'neutral'}>{ticketQuery.data.status}</Badge>

@@ -11,7 +11,7 @@ use math::{
 mod ops;
 use ops::*;
 
-declare_id!("3oAve8qsR5oVtqUcsXtSELBVz5CnJifj4UCvM6AiHa2r");
+declare_id!("2Gg6XUdXVqhSBwiCitDXBomY3JScusUcgSQckdYivv8D");
 
 pub(crate) const SCALE: u128 = 1_000_000;
 
@@ -131,8 +131,6 @@ pub mod basingamarket {
         round.binance_close_time_ms = 0;
         round.bump = ctx.bumps.round;
 
-        init_aggregate(&mut ctx.accounts.up_aggregate, round.key(), Side::Up)?;
-        init_aggregate(&mut ctx.accounts.down_aggregate, round.key(), Side::Down)?;
         Ok(())
     }
 
@@ -147,6 +145,15 @@ pub mod basingamarket {
                 && args.net_usdc <= ctx.accounts.market_config.opening_wallet_side_cap_usdc,
             BasingamarketError::OpeningWalletCapExceeded
         );
+
+        if ctx.accounts.aggregate.round == Pubkey::default() {
+            init_aggregate(
+                &mut ctx.accounts.aggregate,
+                ctx.accounts.round.key(),
+                args.side,
+            )?;
+        }
+
         require!(
             ctx.accounts.aggregate.round == ctx.accounts.round.key()
                 && ctx.accounts.aggregate.side == args.side
@@ -174,6 +181,12 @@ pub mod basingamarket {
             now >= ctx.accounts.round.batch_until,
             BasingamarketError::BatchStillOpen
         );
+
+        if ctx.accounts.aggregate.round == Pubkey::default() {
+            ctx.accounts.aggregate.finalized = true;
+            return Ok(());
+        }
+
         require!(
             ctx.accounts.aggregate.round == ctx.accounts.round.key()
                 && !ctx.accounts.aggregate.finalized,
@@ -693,6 +706,7 @@ pub enum Asset {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
+#[repr(u8)]
 pub enum Side {
     Up,
     Down,

@@ -30,11 +30,10 @@ export default function MarketActivityPanel({
   const {
     getAccessToken,
     loginSolana,
-    solanaWalletAddress,
+    walletAddress,
     solanaWalletsReady,
     solanaWalletResolving
   } = useAuth();
-  const walletAddress = solanaWalletAddress;
   const walletConnectPending = !walletAddress && (solanaWalletResolving || !solanaWalletsReady);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [lastSignature, setLastSignature] = useState<string | null>(null);
@@ -47,9 +46,9 @@ export default function MarketActivityPanel({
     refetchIntervalInBackground: true
   });
   const ticketsQuery = useQuery({
-    queryKey: ['market-tickets', marketId],
-    queryFn: () => api.getMarketTickets(marketId),
-    enabled: Boolean(walletAddress && viewingLive),
+    queryKey: ['market-tickets', marketId, roundId],
+    queryFn: () => api.getMarketTickets(marketId, roundId),
+    enabled: Boolean(walletAddress && roundId),
     staleTime: 0,
     refetchInterval: walletAddress ? 4_000 : false,
     refetchIntervalInBackground: true
@@ -60,8 +59,8 @@ export default function MarketActivityPanel({
     [freshBidBook, marketId, roundId, walletAddress]
   );
   const ownedPositions = useMemo(
-    () => viewingLive ? buildOwnedPositionRows(ticketsQuery.data ?? [], { marketId, walletAddress }) : [],
-    [marketId, ticketsQuery.data, viewingLive, walletAddress]
+    () => buildOwnedPositionRows(ticketsQuery.data ?? [], { marketId, roundId, walletAddress }),
+    [marketId, ticketsQuery.data, roundId, walletAddress]
   );
   const itemCount = activeOrders.length + ownedPositions.length;
   const loading = Boolean(walletAddress && (bidsQuery.isLoading || ticketsQuery.isLoading));
@@ -106,15 +105,48 @@ export default function MarketActivityPanel({
     },
     onError: (error) => setStatusMessage(tradeErrorMessage(error))
   });
+  const claimTicketMutation = useMutation({
+    mutationFn: async (ticket: Ticket) => {
+      if (!walletAddress) throw new Error('Solana wallet unavailable.');
+      const accessToken = await getAccessToken();
+      if (!accessToken) throw new Error('Login session required.');
+      return api.claimTicket({
+        ticketId: ticket.ticket_id,
+        claimerWallet: walletAddress,
+        accessToken
+      });
+    },
+    onSuccess: (result) => {
+      setLastSignature(null);
+      setStatusMessage(`Claimed ${formatUsdPrice(result.amount)} from #${result.ticket_id}`);
+      syncClaimedTicketCache(result.ticket);
+      invalidateActivityQueries(result.ticket_id);
+    },
+    onError: (error) => setStatusMessage(tradeErrorMessage(error))
+  });
 
-  function invalidateActivityQueries() {
+  function invalidateActivityQueries(ticketId?: string) {
+    if (ticketId) {
+      void queryClient.invalidateQueries({ queryKey: ['ticket', ticketId] });
+    }
     void queryClient.invalidateQueries({ queryKey: ['round-bids', roundId, marketId] });
     void queryClient.invalidateQueries({ queryKey: ['round-orderbook', roundId, marketId] });
+    void queryClient.invalidateQueries({ queryKey: ['market-tickets', marketId, roundId] });
     void queryClient.invalidateQueries({ queryKey: ['market-tickets', marketId] });
     void queryClient.invalidateQueries({ queryKey: ['market-curve', marketId] });
     void queryClient.invalidateQueries({ queryKey: ['market', marketId] });
     if (walletAddress) {
       void queryClient.invalidateQueries({ queryKey: cashBalanceQueryKey(walletAddress) });
+      void queryClient.invalidateQueries({ queryKey: ['profile-positions', walletAddress] });
+    }
+  }
+
+  function syncClaimedTicketCache(ticket: Ticket) {
+    queryClient.setQueryData<Ticket>(['ticket', ticket.ticket_id], ticket);
+    queryClient.setQueryData<Ticket[]>(['market-tickets', ticket.market_id, ticket.round_id], (current) => replaceCachedTicket(current, ticket));
+    queryClient.setQueryData<Ticket[]>(['market-tickets', ticket.market_id], (current) => replaceCachedTicket(current, ticket));
+    if (walletAddress) {
+      queryClient.setQueryData<Ticket[]>(['profile-positions', walletAddress], (current) => replaceCachedTicket(current, ticket));
     }
   }
 
@@ -185,8 +217,15 @@ export default function MarketActivityPanel({
                 <div key={ticket.ticket_id} className="rounded-xl border border-terminal-line bg-terminal-bg p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className={cn('text-sm font-black', side === 'UP' ? 'text-market-positive' : 'text-market-negative')}>
-                        #{ticket.ticket_id} {side}
+                      <p className={cn('flex items-center gap-1 text-xs font-black', side === 'UP' ? 'text-market-positive' : 'text-market-negative')}>
+                        {ticket.token_name ? (
+                          <>
+                            <span className="truncate">{ticket.token_name.replace(/-(up|down)$/i, '')}</span>
+                            <span className="shrink-0 whitespace-nowrap">{side}</span>
+                          </>
+                        ) : (
+                          <span>#{ticket.ticket_id} {side}</span>
+                        )}
                       </p>
                       <p className="mt-1 text-xs font-semibold text-terminal-muted">
                         {formatTokenAmount(ticketTokenAmount(ticket))} token · cost {formatUsdPrice(ticketCostBasis(ticket))}
@@ -210,6 +249,16 @@ export default function MarketActivityPanel({
                       >
                         {cancelListingMutation.isPending && cancelListingMutation.variables?.ticket_id === ticket.ticket_id ? <Loader2 className="animate-spin" size={13} /> : null}
                         Cancel listing
+                      </Button>
+                    ) : canClaimTicket(ticket) ? (
+                      <Button
+                        className="h-8 shrink-0 px-3 text-xs"
+                        disabled={claimTicketMutation.isPending && claimTicketMutation.variables?.ticket_id === ticket.ticket_id}
+                        onClick={() => claimTicketMutation.mutate(ticket)}
+                        variant="secondary"
+                      >
+                        {claimTicketMutation.isPending && claimTicketMutation.variables?.ticket_id === ticket.ticket_id ? <Loader2 className="animate-spin" size={13} /> : null}
+                        Claim
                       </Button>
                     ) : (
                       <Badge className="shrink-0 px-2 py-0.5 text-[10px]" tone="neutral">{ticket.status}</Badge>
@@ -283,9 +332,11 @@ export function buildOwnedPositionRows(
   tickets: Ticket[],
   {
     marketId,
+    roundId,
     walletAddress
   }: {
     marketId: string;
+    roundId: string | null;
     walletAddress: string | null;
   }
 ) {
@@ -293,10 +344,20 @@ export function buildOwnedPositionRows(
 
   return tickets.filter((ticket) =>
     ticket.market_id === marketId
+    && (!roundId || ticket.round_id === roundId)
     && sameWallet(ticket.current_owner, walletAddress)
     && !ticket.claimed
-    && (ticket.status === 'active' || ticket.status === 'listed' || ticket.status === 'won' || ticket.status === 'lost')
+    && (ticket.status === 'active' || ticket.status === 'listed' || ticket.status === 'won' || ticket.status === 'lost' || ticket.status === 'refundable')
   );
+}
+
+function canClaimTicket(ticket: Ticket) {
+  return !ticket.claimed && (ticket.status === 'won' || ticket.status === 'refundable');
+}
+
+function replaceCachedTicket(current: Ticket[] | undefined, ticket: Ticket) {
+  if (!current) return current;
+  return current.map((cachedTicket) => cachedTicket.ticket_id === ticket.ticket_id ? ticket : cachedTicket);
 }
 
 function sideFromTicket(ticket: Ticket): TradeSide {
@@ -324,6 +385,17 @@ export function positionPnl(
   if (ticket.realized_pnl_usdc !== null && ticket.realized_pnl_usdc !== undefined) {
     const amount = safeBigInt(ticket.realized_pnl_usdc);
     if (amount === null) return null;
+    return {
+      amount,
+      label: 'Realized',
+      tone: pnlTone(amount)
+    };
+  }
+
+  if (ticket.status === 'lost') {
+    const costBasis = safeBigInt(ticketCostBasis(ticket));
+    if (costBasis === null) return null;
+    const amount = costBasis === 0n ? 0n : -costBasis;
     return {
       amount,
       label: 'Realized',

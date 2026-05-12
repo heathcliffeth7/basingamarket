@@ -17,7 +17,7 @@
   const badgeTone = $derived(
     node.status === 'listed'
       ? 'warning'
-      : node.status === 'won'
+      : node.status === 'won' || node.status === 'refundable'
         ? 'positive'
         : node.status === 'lost'
           ? 'negative'
@@ -57,7 +57,7 @@
       <span
         class="text-right font-mono"
         class:text-market-warning={node.listed}
-        class:text-market-positive={node.status === 'won' || node.status === 'active'}
+        class:text-market-positive={node.status === 'won' || node.status === 'refundable' || node.status === 'active'}
         class:text-market-negative={node.status === 'lost'}
         class:text-terminal-muted={node.status === 'claimed'}
       >

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import http from 'node:http';
 import {
+  fetchDepositLiquidity,
   liquidityStatusFromValues,
   manualReserveInstructions,
   parseArgs,
@@ -23,12 +25,17 @@ describe('reserve-devnet-cash script helpers', () => {
       '--payer-keypair',
       'payer.json',
       '--api-base-url',
-      'http://api.test'
+      'http://api.test',
+      '--api-timeout-ms',
+      '2500',
+      '--skip-liquidity'
     ])).toMatchObject({
       amount: '25.50',
       apiBaseUrl: 'http://api.test',
+      apiTimeoutMs: 2500,
       mintAuthorityKeypair: 'mint-authority.json',
-      payerKeypair: 'payer.json'
+      payerKeypair: 'payer.json',
+      skipLiquidity: true
     });
 
     expect(parseArgs([
@@ -54,6 +61,7 @@ describe('reserve-devnet-cash script helpers', () => {
       '--mint-authority-keypair',
       'authority.json'
     ])).toThrow(/either --source-keypair or --mint-authority-keypair/);
+    expect(() => parseArgs(['--amount', '1', '--api-timeout-ms', '0'])).toThrow(/positive integer/);
   });
 
   it('loads devnet cash env values', () => {
@@ -79,6 +87,33 @@ describe('reserve-devnet-cash script helpers', () => {
     });
   });
 
+  it('fetches deposit liquidity with a timeout', async () => {
+    await withServer((request, response) => {
+      expect(request.url).toBe('/deposit/liquidity');
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({
+        status: 'ready',
+        available_cash_reserve: '1000000'
+      }));
+    }, async (baseUrl) => {
+      await expect(fetchDepositLiquidity(baseUrl, { timeoutMs: 100 })).resolves.toMatchObject({
+        status: 'ready',
+        available_cash_reserve: '1000000'
+      });
+    });
+  });
+
+  it('fails deposit liquidity fetches that exceed the timeout', async () => {
+    await withServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{}');
+      }, 50);
+    }, async (baseUrl) => {
+      await expect(fetchDepositLiquidity(baseUrl, { timeoutMs: 10 })).rejects.toThrow(/timeout/);
+    });
+  });
+
   it('prints Phantom-safe manual top-up instructions', () => {
     const instructions = manualReserveInstructions({
       amount: '5',
@@ -95,3 +130,16 @@ describe('reserve-devnet-cash script helpers', () => {
     expect(instructions).toContain('do not verify it as a user deposit');
   });
 });
+
+async function withServer(handler, callback) {
+  const server = http.createServer(handler);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    await callback(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+}

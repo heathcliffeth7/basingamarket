@@ -78,6 +78,7 @@ pub enum ProtocolEvent {
     TicketMinted {
         ticket_id: u64,
         market_id: u64,
+        round_id: u64,
         owner: String,
         outcome_id: u8,
         stake_amount: u128,

@@ -42,6 +42,7 @@ pub fn sample_fixture_events() -> Vec<(EventMeta, ProtocolEvent)> {
             ProtocolEvent::TicketMinted {
                 ticket_id: 1,
                 market_id: 1,
+                round_id: 1,
                 owner: FIXTURE_OWNER.to_owned(),
                 outcome_id: 0,
                 stake_amount: 1_000_000,

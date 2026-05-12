@@ -30,6 +30,7 @@ import {
 
 const DEFAULT_ENV_PATH = '../../.env';
 const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8080';
+const DEFAULT_API_TIMEOUT_MS = 5000;
 const DEFAULT_RPC_URL = 'https://api.devnet.solana.com';
 const DEFAULT_WS_URL = 'wss://api.devnet.solana.com';
 const CASH_DECIMALS = 6;
@@ -38,8 +39,10 @@ export function parseArgs(argv) {
   const options = {
     env: DEFAULT_ENV_PATH,
     apiBaseUrl: DEFAULT_API_BASE_URL,
+    apiTimeoutMs: DEFAULT_API_TIMEOUT_MS,
     rpcUrl: null,
     wsUrl: null,
+    skipLiquidity: false,
     verifyOnly: false
   };
 
@@ -48,6 +51,10 @@ export function parseArgs(argv) {
     if (flag === '--help' || flag === '-h') return { ...options, help: true };
     if (flag === '--verify-only') {
       options.verifyOnly = true;
+      continue;
+    }
+    if (flag === '--skip-liquidity') {
+      options.skipLiquidity = true;
       continue;
     }
     if (!flag?.startsWith('--')) throw new Error(`Unexpected argument: ${flag}`);
@@ -60,6 +67,7 @@ export function parseArgs(argv) {
     else if (flag === '--mint-authority-keypair') options.mintAuthorityKeypair = next;
     else if (flag === '--env') options.env = next;
     else if (flag === '--api-base-url') options.apiBaseUrl = next;
+    else if (flag === '--api-timeout-ms') options.apiTimeoutMs = parsePositiveInteger(next, flag);
     else if (flag === '--rpc-url') options.rpcUrl = next;
     else if (flag === '--ws-url') options.wsUrl = next;
     else throw new Error(`Unknown option: ${flag}`);
@@ -89,6 +97,14 @@ export function parseEnvText(text) {
   return values;
 }
 
+function parsePositiveInteger(value, flag) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed.toString() !== value.trim()) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return parsed;
+}
+
 export function liquidityStatusFromValues(vaultCashBalance, totalCashLiabilities) {
   const vault = BigInt(vaultCashBalance);
   const liabilities = BigInt(totalCashLiabilities);
@@ -116,7 +132,7 @@ async function reserveDevnetCash(options) {
   if (options.verifyOnly) {
     return {
       mode: 'verify',
-      liquidity: await fetchDepositLiquidity(options.apiBaseUrl)
+      liquidity: await fetchDepositLiquidity(options.apiBaseUrl, { timeoutMs: options.apiTimeoutMs })
     };
   }
 
@@ -133,7 +149,9 @@ async function reserveDevnetCash(options) {
       return {
         mode: 'mint',
         signature,
-        liquidity: await fetchDepositLiquidity(options.apiBaseUrl).catch(() => null)
+        liquidity: options.skipLiquidity
+          ? null
+          : await fetchDepositLiquidity(options.apiBaseUrl, { timeoutMs: options.apiTimeoutMs }).catch(() => null)
       };
     }
     return {
@@ -152,7 +170,9 @@ async function reserveDevnetCash(options) {
   return {
     mode: 'transfer',
     signature,
-    liquidity: await fetchDepositLiquidity(options.apiBaseUrl).catch(() => null)
+    liquidity: options.skipLiquidity
+      ? null
+      : await fetchDepositLiquidity(options.apiBaseUrl, { timeoutMs: options.apiTimeoutMs }).catch(() => null)
   };
 }
 
@@ -277,12 +297,24 @@ async function transferReserveFromSourceKeypair(options, config, amount) {
   return getSignatureFromTransaction(signedTransaction);
 }
 
-async function fetchDepositLiquidity(apiBaseUrl) {
-  const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/deposit/liquidity`, {
-    headers: { accept: 'application/json' }
-  });
-  if (!response.ok) throw new Error(`API ${response.status} for /deposit/liquidity`);
-  return response.json();
+export async function fetchDepositLiquidity(apiBaseUrl, { timeoutMs = DEFAULT_API_TIMEOUT_MS } = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/deposit/liquidity`, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`API ${response.status} for /deposit/liquidity`);
+    return response.json();
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`API timeout after ${timeoutMs}ms for /deposit/liquidity`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function loadKeypairSigner(keypairPath) {
@@ -309,6 +341,7 @@ function printHelp() {
   npm run reserve:devnet-cash -- --amount <BUSDC>
   npm run reserve:devnet-cash -- --amount <BUSDC> --source-keypair <keypair.json>
   npm run reserve:devnet-cash -- --amount <BUSDC> --mint-authority-keypair <keypair.json> [--payer-keypair <keypair.json>]
+  npm run reserve:devnet-cash -- --amount <BUSDC> --mint-authority-keypair <keypair.json> --skip-liquidity
   npm run reserve:devnet-cash -- --verify-only
 
 Adds devnet-only app/admin BUSDC reserve to the configured vault. This does not credit any user App BUSDC balance.`);

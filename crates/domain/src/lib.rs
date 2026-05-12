@@ -30,6 +30,7 @@ pub enum TicketStatus {
     Active,
     Listed,
     Claimable,
+    Refundable,
     Claimed,
     Lost,
     Cancelled,

@@ -14,9 +14,14 @@ describe('amount formatting', () => {
   it('parses positive 6-decimal deposit amounts', () => {
     expect(parseTokenAmountToBaseUnits('1')).toBe('1000000');
     expect(parseTokenAmountToBaseUnits('1.25')).toBe('1250000');
+    expect(parseTokenAmountToBaseUnits('1,2')).toBe('1200000');
     expect(parseTokenAmountToBaseUnits('0.000001')).toBe('1');
+    expect(parseTokenAmountToBaseUnits('0,000001')).toBe('1');
     expect(parseTokenAmountToBaseUnits('0')).toBeNull();
     expect(parseTokenAmountToBaseUnits('1.0000001')).toBeNull();
+    expect(parseTokenAmountToBaseUnits('1,0000001')).toBeNull();
+    expect(parseTokenAmountToBaseUnits('1,2.3')).toBeNull();
+    expect(parseTokenAmountToBaseUnits('1.2,3')).toBeNull();
     expect(parseTokenAmountToBaseUnits('-1')).toBeNull();
     expect(parseTokenAmountToBaseUnits('abc')).toBeNull();
   });

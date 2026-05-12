@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { ReactElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cashBalanceQueryKey } from '@/lib/api/cashBalanceQuery';
 import { mockTickets, mockWalletAddress } from '@/lib/api/mock';
 import type { BidBook, CashBid, Ticket } from '@/lib/api/types';
 import MarketActivityPanel, { buildActiveOrderRows, buildOwnedPositionRows, positionPnl } from './MarketActivityPanel';
@@ -12,12 +13,14 @@ const apiMock = vi.hoisted(() => ({
   getBids: vi.fn(),
   getMarketTickets: vi.fn(),
   cancelBid: vi.fn(),
-  cancelListing: vi.fn()
+  cancelListing: vi.fn(),
+  claimTicket: vi.fn()
 }));
 
 const authMock = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   loginSolana: vi.fn(),
+  walletAddress: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as string | null,
   solanaWalletAddress: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as string | null,
   solanaWallet: null,
   solanaWalletsReady: true,
@@ -46,6 +49,7 @@ describe('MarketActivityPanel', () => {
   beforeEach(() => {
     authMock.getAccessToken.mockResolvedValue('privy-access-token');
     authMock.loginSolana.mockResolvedValue(undefined);
+    authMock.walletAddress = WALLET;
     authMock.solanaWalletAddress = WALLET;
     authMock.solanaWallet = null;
     authMock.solanaWalletsReady = true;
@@ -70,6 +74,13 @@ describe('MarketActivityPanel', () => {
       signature: 'devnet-signature',
       explorer_url: 'https://explorer.solana.com/tx/devnet-signature?cluster=devnet'
     });
+    apiMock.claimTicket.mockResolvedValue({
+      status: 'claimed',
+      ticket_id: 'won-position',
+      amount: '1250000',
+      cash_balance: '1250000',
+      ticket: ownedTicket({ ticket_id: 'won-position', status: 'claimed', claimed: true })
+    });
   });
 
   afterEach(() => {
@@ -82,6 +93,7 @@ describe('MarketActivityPanel', () => {
   });
 
   it('shows a wallet connect state under the chart when no wallet is connected', () => {
+    authMock.walletAddress = null;
     authMock.solanaWalletAddress = null;
     authMock.hasSolanaWallet = false;
     const queryClient = createTestQueryClient();
@@ -147,7 +159,7 @@ describe('MarketActivityPanel', () => {
       ownedTicket({ ticket_id: 'other-wallet', current_owner: 'So11111111111111111111111111111111111111112' }),
       ownedTicket({ ticket_id: 'claimed', claimed: true }),
       ownedTicket({ ticket_id: 'won-position', status: 'won', realized_pnl_usdc: '250000' })
-    ], { marketId: MARKET_ID, walletAddress: WALLET });
+    ], { marketId: MARKET_ID, roundId: ROUND_ID, walletAddress: WALLET });
 
     expect(rows.map((ticket) => ticket.ticket_id)).toEqual(['owned-active', 'listed-owned', 'won-position']);
   });
@@ -193,26 +205,42 @@ describe('MarketActivityPanel', () => {
     expect(pnl?.amount).toBe(-1000000n);
   });
 
+  it('falls back to full negative cost for legacy lost positions without backend pnl', () => {
+    const pnl = positionPnl(ownedTicket({
+      status: 'lost',
+      cost_basis_usdc: '1250000',
+      settlement_value_usdc: null,
+      realized_pnl_usdc: null
+    }), 'DOWN', null, null);
+
+    expect(pnl?.label).toBe('Realized');
+    expect(pnl?.amount).toBe(-1250000n);
+  });
+
   it('renders active orders and owned positions while hiding other wallets activity', async () => {
     const { container } = mountPanel();
     await waitFor(() => expect(container.textContent).toContain('UP limit order'));
 
     expect(container.textContent).toContain('Active orders');
     expect(container.textContent).toContain('$0.70 limit');
-    expect(container.textContent).toContain('#owned-active UP');
+    expect(container.textContent).toContain('btc-updown-5m-1700000100');
+    expect(container.textContent).toContain('UP');
+    expect(container.textContent).not.toContain('#owned-active');
     expect(container.textContent).toContain('Unrealized PnL +$');
-    expect(container.textContent).toContain('#listed-owned DOWN');
+    expect(container.textContent).toContain('btc-updown-5m-1700000100');
+    expect(container.textContent).toContain('DOWN');
+    expect(container.textContent).not.toContain('#listed-owned');
     expect(container.textContent).not.toContain('other-wallet');
   });
 
-  it('does not show live owned positions on historical routes without round-scoped ticket data', async () => {
+  it('filters out owned positions from other rounds on historical routes', async () => {
     apiMock.getBids.mockResolvedValue({ round_id: ROUND_ID, bids: [] });
 
-    const { container } = mountPanel(createTestQueryClient(), false);
+    const { container } = mountPanel(createTestQueryClient(), false, '5666668');
     await waitFor(() => expect(container.textContent).toContain('No active orders or owned positions'));
 
     expect(container.textContent).not.toContain('#owned-active');
-    expect(apiMock.getMarketTickets).not.toHaveBeenCalled();
+    expect(apiMock.getMarketTickets).toHaveBeenCalled();
   });
 
   it('cancels an active limit order and invalidates activity caches', async () => {
@@ -234,7 +262,7 @@ describe('MarketActivityPanel', () => {
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['round-bids', ROUND_ID, MARKET_ID] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['round-orderbook', ROUND_ID, MARKET_ID] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-tickets', MARKET_ID] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-tickets', MARKET_ID, ROUND_ID] });
   });
 
   it('cancels a listed owned position and keeps unlisted positions read-only', async () => {
@@ -262,10 +290,60 @@ describe('MarketActivityPanel', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market', MARKET_ID] });
   });
 
-  function mountPanel(queryClient = createTestQueryClient(), viewingLive = true) {
+  it('claims won and refundable positions while hiding lost and claimed actions', async () => {
+    apiMock.getBids.mockResolvedValue({ round_id: ROUND_ID, bids: [] });
+    let tickets = [
+      ownedTicket({ ticket_id: 'won-position', status: 'won', settlement_value_usdc: '1250000', realized_pnl_usdc: '250000' }),
+      ownedTicket({ ticket_id: 'refund-position', status: 'refundable', settlement_value_usdc: '1000000', realized_pnl_usdc: '0' }),
+      ownedTicket({ ticket_id: 'lost-position', status: 'lost', settlement_value_usdc: '0', realized_pnl_usdc: '-1000000' }),
+      ownedTicket({ ticket_id: 'claimed-position', status: 'claimed', claimed: true })
+    ];
+    apiMock.getMarketTickets.mockImplementation(() => Promise.resolve(tickets));
+    apiMock.claimTicket.mockImplementation(async () => {
+      const claimedTicket = ownedTicket({ ticket_id: 'won-position', status: 'claimed', claimed: true });
+      tickets = tickets.map((ticket) => ticket.ticket_id === claimedTicket.ticket_id ? claimedTicket : ticket);
+      return {
+        status: 'claimed',
+        ticket_id: claimedTicket.ticket_id,
+        amount: '1250000',
+        cash_balance: '1250000',
+        ticket: claimedTicket
+      };
+    });
+    const queryClient = createTestQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const { container } = mountPanel(queryClient);
+    await waitFor(() => expect(container.textContent).toContain('Realized PnL +$0.25'));
+
+    expect(Array.from(container.querySelectorAll('button')).filter((button) => button.textContent?.includes('Claim'))).toHaveLength(2);
+    expect(container.textContent).toContain('Realized PnL +$0.25');
+    expect(container.textContent).toContain('Realized PnL $0.00');
+    expect(container.textContent).toContain('Realized PnL -$1.00');
+    expect(container.textContent).toContain('3 items');
+
+    await act(async () => {
+      findButton(container, 'Claim').click();
+    });
+    await waitFor(() => expect(apiMock.claimTicket).toHaveBeenCalled());
+
+    expect(apiMock.claimTicket).toHaveBeenCalledWith({
+      ticketId: 'won-position',
+      claimerWallet: WALLET,
+      accessToken: 'privy-access-token'
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-tickets', MARKET_ID, ROUND_ID] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['ticket', 'won-position'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: cashBalanceQueryKey(WALLET) });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profile-positions', WALLET] });
+    await waitFor(() => {
+      expect(Array.from(container.querySelectorAll('button')).filter((button) => button.textContent?.includes('Claim'))).toHaveLength(1);
+    });
+  });
+
+  function mountPanel(queryClient = createTestQueryClient(), viewingLive = true, roundId = ROUND_ID) {
     return mount(
       <QueryClientProvider client={queryClient}>
-        <MarketActivityPanel marketId={MARKET_ID} roundId={ROUND_ID} viewingLive={viewingLive} />
+        <MarketActivityPanel marketId={MARKET_ID} roundId={roundId} viewingLive={viewingLive} />
       </QueryClientProvider>
     );
   }
@@ -331,6 +409,7 @@ function defaultTickets(): Ticket[] {
     ownedTicket({
       ticket_id: 'listed-owned',
       outcome_id: 1,
+      token_name: 'btc-updown-5m-1700000100-down',
       listed_price: '850000',
       status: 'listed'
     }),
@@ -361,6 +440,7 @@ function ownedTicket(overrides: Partial<Ticket> = {}): Ticket {
     ...mockTickets[0],
     ticket_id: 'owned-active',
     market_id: MARKET_ID,
+    round_id: ROUND_ID,
     outcome_id: 0,
     current_owner: WALLET,
     listed_price: null,

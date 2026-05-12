@@ -6,7 +6,7 @@ seeds = true
 skip-lint = false
 
 [programs.devnet]
-basingamarket = "3oAve8qsR5oVtqUcsXtSELBVz5CnJifj4UCvM6AiHa2r"
+basingamarket = "2Gg6XUdXVqhSBwiCitDXBomY3JScusUcgSQckdYivv8D"
 
 [provider]
 cluster = "devnet"

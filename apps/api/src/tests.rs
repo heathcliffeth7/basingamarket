@@ -2,9 +2,12 @@ use axum::http::{header, Method, StatusCode};
 use basingamarket_auth::{PrivyAccessTokenClaims, PrivyAuthConfig};
 use basingamarket_db::{
     CashBidRow, CashProjectionSnapshot, CashResaleRow, CashTradeReservationRow, CashTradeRow,
-    EventMeta, ProjectionEngine,
+    EventMeta, ProjectionEngine, TicketRow,
 };
-use basingamarket_domain::crypto_rounds::current_round_id;
+use basingamarket_domain::{
+    crypto_rounds::{current_round_id, round_window},
+    TicketStatus,
+};
 use basingamarket_protocol_events::ProtocolEvent;
 use http_body_util::BodyExt;
 use jsonwebtoken::{encode, get_current_timestamp, Algorithm, EncodingKey, Header};
@@ -137,6 +140,7 @@ async fn seeded_state() -> AppState {
             ProtocolEvent::TicketMinted {
                 ticket_id: 7,
                 market_id: 1,
+                round_id: 1,
                 owner: TEST_SOLANA_PUBKEY.to_owned(),
                 outcome_id: 0,
                 stake_amount: 1_000_000,
@@ -228,7 +232,8 @@ async fn legacy_cash_trade_backfill_infers_market_id_from_position_lot_pda() {
             }],
             ..CashProjectionSnapshot::default()
         })
-        .await;
+        .await
+        .unwrap();
 
     let backfilled = backfill_legacy_cash_trade_market_ids(&state).await.unwrap();
     let snapshot = state.store.cash_projection_snapshot().await;
@@ -259,6 +264,86 @@ fn price_header_fixture(state: &'static str) -> MarketPriceHeaderResponse {
     }
 }
 
+fn closed_price_header_for_round(round_id: u64, close_price: u128) -> MarketPriceHeaderResponse {
+    let start_at = (round_id * 300) as i64;
+    MarketPriceHeaderResponse {
+        asset: "BTC".to_owned(),
+        asset_image_url: "/visuals/crypto/btc.svg".to_owned(),
+        duration_seconds: 300,
+        settlement_source: "Binance Spot BTCUSDT 5m".to_owned(),
+        symbol: "BTCUSDT".to_owned(),
+        round_id: round_id.to_string(),
+        start_at,
+        end_at: start_at + 300,
+        open_price: Some("100000000".to_owned()),
+        current_price: None,
+        close_price: Some(close_price.to_string()),
+        price_display_state: "closed",
+        fetched_at: "2026-05-10T00:00:00Z".to_owned(),
+    }
+}
+
+async fn seed_cash_ticket(
+    state: &AppState,
+    wallet: &str,
+    lot_id: u64,
+    round_id: u64,
+    side: &str,
+    usdc_in: u128,
+    tickets_out: u128,
+) {
+    let now = chrono::Utc::now();
+    let current = state
+        .store
+        .get_cash_balance(wallet)
+        .await
+        .map(|row| row.cash_balance)
+        .unwrap_or(0);
+    state
+        .store
+        .upsert_cash_balance(CashBalanceRow {
+            wallet_address: wallet.to_owned(),
+            cash_balance: current + usdc_in,
+            updated_at: now,
+        })
+        .await;
+    let trade_id = format!("trade-{lot_id}");
+    state
+        .store
+        .reserve_cash_trade(CashTradeReservationRow {
+            trade_id: trade_id.clone(),
+            wallet_address: wallet.to_owned(),
+            amount: usdc_in,
+            released: false,
+            completed_signature: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    state
+        .store
+        .record_cash_trade(CashTradeRow {
+            trade_id,
+            wallet_address: wallet.to_owned(),
+            signature: format!("cash-buy-{lot_id}"),
+            mint: TEST_SOLANA_PUBKEY.to_owned(),
+            vault_token_account: TEST_SOLANA_PUBKEY.to_owned(),
+            market_id: 1,
+            round_id,
+            position_lot: format!("lot-{lot_id}"),
+            lot_id,
+            side: side.to_owned(),
+            usdc_in,
+            fee_usdc: 0,
+            net_usdc: usdc_in,
+            tickets_out,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn orderbook_groups_active_bids_and_listed_asks_by_side() {
     let state = seeded_state().await;
@@ -269,6 +354,7 @@ async fn orderbook_groups_active_bids_and_listed_asks_by_side() {
             ProtocolEvent::TicketMinted {
                 ticket_id: 8,
                 market_id: 1,
+                round_id: 1,
                 owner: "So11111111111111111111111111111111111111112".to_owned(),
                 outcome_id: 1,
                 stake_amount: 2_000_000,
@@ -281,16 +367,6 @@ async fn orderbook_groups_active_bids_and_listed_asks_by_side() {
         .await
         .unwrap();
     let round_id = current_round_id(chrono::Utc::now().timestamp(), 300).unwrap();
-    state
-        .store
-        .list_ticket(7, 800_000, &EventMeta::fixture(4, 0))
-        .await
-        .unwrap();
-    state
-        .store
-        .list_ticket(8, 600_000, &EventMeta::fixture(5, 0))
-        .await
-        .unwrap();
     let now = chrono::Utc::now();
     state
         .store
@@ -375,7 +451,18 @@ async fn orderbook_groups_active_bids_and_listed_asks_by_side() {
             ],
             ..CashProjectionSnapshot::default()
         })
-        .await;
+        .await
+        .unwrap();
+    state
+        .store
+        .list_ticket(7, 800_000, &EventMeta::fixture(4, 0))
+        .await
+        .unwrap();
+    state
+        .store
+        .list_ticket(8, 600_000, &EventMeta::fixture(5, 0))
+        .await
+        .unwrap();
 
     let response = build_router(state)
         .oneshot(
@@ -398,6 +485,446 @@ async fn orderbook_groups_active_bids_and_listed_asks_by_side() {
     assert_eq!(json["sides"][1]["side"], "DOWN");
     assert_eq!(json["sides"][1]["bids"].as_array().unwrap().len(), 0);
     assert_eq!(json["sides"][1]["asks"][0]["lot_id"], "8");
+}
+
+#[tokio::test]
+async fn cash_buy_ticket_response_exposes_token_amount_and_total_cost_basis() {
+    let state = seeded_state_with_price(price_header_fixture("live")).await;
+    let now = chrono::Utc::now();
+    state
+        .store
+        .upsert_cash_balance(CashBalanceRow {
+            wallet_address: TEST_SOLANA_PUBKEY.to_owned(),
+            cash_balance: 5_000_000,
+            updated_at: now,
+        })
+        .await;
+    state
+        .store
+        .reserve_cash_trade(CashTradeReservationRow {
+            trade_id: "trade-pnl".to_owned(),
+            wallet_address: TEST_SOLANA_PUBKEY.to_owned(),
+            amount: 1_000_000,
+            released: false,
+            completed_signature: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    state
+        .store
+        .record_cash_trade(CashTradeRow {
+            trade_id: "trade-pnl".to_owned(),
+            wallet_address: TEST_SOLANA_PUBKEY.to_owned(),
+            signature: "cash-buy-pnl".to_owned(),
+            mint: TEST_SOLANA_PUBKEY.to_owned(),
+            vault_token_account: TEST_SOLANA_PUBKEY.to_owned(),
+            market_id: 1,
+            round_id: 5928339,
+            position_lot: "lot-pnl".to_owned(),
+            lot_id: 42,
+            side: "UP".to_owned(),
+            usdc_in: 1_000_000,
+            fee_usdc: 5_000,
+            net_usdc: 995_000,
+            tickets_out: 1_900_000,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/tickets/42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["token_amount"], "1900000");
+    assert_eq!(json["token_name"], "btc-updown-5m-1700000100-up");
+    assert_eq!(json["cost_basis_usdc"], "1000000");
+    assert_eq!(json["avg_entry_price"], "526315");
+    assert_eq!(json["settlement_value_usdc"], Value::Null);
+    assert_eq!(json["realized_pnl_usdc"], Value::Null);
+}
+
+#[tokio::test]
+async fn market_ticket_response_uses_market_slug_token_name_for_down_side() {
+    let state = seeded_state_with_price(price_header_fixture("live")).await;
+    let engine = ProjectionEngine::new(state.store.clone());
+    engine
+        .apply_raw_event(
+            EventMeta::fixture(2, 0),
+            ProtocolEvent::TicketMinted {
+                ticket_id: 8,
+                market_id: 1,
+                round_id: 1,
+                owner: TEST_SOLANA_PUBKEY.to_owned(),
+                outcome_id: 1,
+                stake_amount: 1_000_000,
+                reward_shares: 1_000_000,
+                entry_odds: 1_000_000,
+                confidence: 80,
+                mood: 1,
+            },
+        )
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/markets/1/tickets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json[0]["token_name"], "btc-updown-5m-1700000100-down");
+}
+
+#[tokio::test]
+async fn ticket_response_uses_phase_one_slug_when_price_header_is_unavailable() {
+    let now_ts = chrono::Utc::now().timestamp();
+    let round_id = current_round_id(now_ts, 300).unwrap();
+    let (start_at, _) = round_window(round_id, 300).unwrap();
+    let app = build_router(seeded_state().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/tickets/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let after_round_id = current_round_id(chrono::Utc::now().timestamp(), 300).unwrap();
+    let (after_start_at, _) = round_window(after_round_id, 300).unwrap();
+    let token_name = json["token_name"].as_str().unwrap();
+
+    assert!(
+        token_name == format!("btc-updown-5m-{start_at}-up")
+            || token_name == format!("btc-updown-5m-{after_start_at}-up")
+    );
+}
+
+#[test]
+fn ticket_response_keeps_safe_token_name_fallback_for_unknown_markets() {
+    let now = chrono::Utc::now();
+    let response = TicketResponse::from_row(
+        TicketRow {
+            ticket_id: 9,
+            market_id: 999,
+            round_id: 1,
+            outcome_id: 1,
+            original_caller: TEST_SOLANA_PUBKEY.to_owned(),
+            current_owner: TEST_SOLANA_PUBKEY.to_owned(),
+            stake_amount: 1_000_000,
+            reward_shares: 1_000_000,
+            entry_odds: 1_000_000,
+            cost_basis_usdc: 1_000_000,
+            settlement_value_usdc: None,
+            listed_price: None,
+            status: TicketStatus::Active,
+            claimed: false,
+            confidence: 80,
+            mood: 1,
+            created_slot: 1,
+            created_at: now,
+            updated_at: now,
+        },
+        None,
+        None,
+    );
+
+    assert_eq!(response.token_name, "market-999-down");
+}
+
+#[test]
+fn lost_ticket_response_realized_pnl_falls_back_to_negative_cost_without_settlement() {
+    let now = chrono::Utc::now();
+    let response = TicketResponse::from_row(
+        TicketRow {
+            ticket_id: 9,
+            market_id: 1,
+            round_id: 1,
+            outcome_id: 1,
+            original_caller: TEST_SOLANA_PUBKEY.to_owned(),
+            current_owner: TEST_SOLANA_PUBKEY.to_owned(),
+            stake_amount: 1_000_000,
+            reward_shares: 1_000_000,
+            entry_odds: 1_000_000,
+            cost_basis_usdc: 1_250_000,
+            settlement_value_usdc: None,
+            listed_price: None,
+            status: TicketStatus::Lost,
+            claimed: false,
+            confidence: 80,
+            mood: 1,
+            created_slot: 1,
+            created_at: now,
+            updated_at: now,
+        },
+        Some(&price_header_fixture("closed")),
+        None,
+    );
+
+    assert_eq!(response.token_name, "btc-updown-5m-1700000100-down");
+    assert_eq!(response.settlement_value_usdc, None);
+    assert_eq!(response.realized_pnl_usdc.as_deref(), Some("-1250000"));
+}
+
+#[tokio::test]
+async fn resale_updates_current_owner_cost_basis() {
+    let state = seeded_state().await;
+    let now = chrono::Utc::now();
+    let buyer = "So11111111111111111111111111111111111111112";
+    state
+        .store
+        .upsert_cash_balance(CashBalanceRow {
+            wallet_address: TEST_SOLANA_PUBKEY.to_owned(),
+            cash_balance: 5_000_000,
+            updated_at: now,
+        })
+        .await;
+    state
+        .store
+        .upsert_cash_balance(CashBalanceRow {
+            wallet_address: buyer.to_owned(),
+            cash_balance: 5_000_000,
+            updated_at: now,
+        })
+        .await;
+    state
+        .store
+        .reserve_cash_trade(CashTradeReservationRow {
+            trade_id: "trade-resale-pnl".to_owned(),
+            wallet_address: TEST_SOLANA_PUBKEY.to_owned(),
+            amount: 1_000_000,
+            released: false,
+            completed_signature: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    state
+        .store
+        .record_cash_trade(CashTradeRow {
+            trade_id: "trade-resale-pnl".to_owned(),
+            wallet_address: TEST_SOLANA_PUBKEY.to_owned(),
+            signature: "cash-buy-resale-pnl".to_owned(),
+            mint: TEST_SOLANA_PUBKEY.to_owned(),
+            vault_token_account: TEST_SOLANA_PUBKEY.to_owned(),
+            market_id: 1,
+            round_id: 5928339,
+            position_lot: "lot-resale-pnl".to_owned(),
+            lot_id: 43,
+            side: "UP".to_owned(),
+            usdc_in: 1_000_000,
+            fee_usdc: 5_000,
+            net_usdc: 995_000,
+            tickets_out: 1_900_000,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    state
+        .store
+        .record_cash_resale(CashResaleRow {
+            sale_id: "sale-pnl".to_owned(),
+            signature: "sale-pnl-signature".to_owned(),
+            bid_id: None,
+            market_id: 1,
+            round_id: 5928339,
+            seller_wallet: TEST_SOLANA_PUBKEY.to_owned(),
+            buyer_wallet: buyer.to_owned(),
+            source_lot_id: 43,
+            buyer_lot_id: None,
+            side: "UP".to_owned(),
+            tickets_sold: 1_900_000,
+            gross_usdc: 1_500_000,
+            resale_fee: 0,
+            early_flip_fee: 0,
+            seller_receives: 1_500_000,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/tickets/43")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["current_owner"], buyer);
+    assert_eq!(json["token_amount"], "1900000");
+    assert_eq!(json["cost_basis_usdc"], "1500000");
+    assert_eq!(json["avg_entry_price"], "789473");
+}
+
+#[tokio::test]
+async fn round_resolved_ticket_response_exposes_realized_pnl() {
+    let state = seeded_state().await;
+    let engine = ProjectionEngine::new(state.store.clone());
+    engine
+        .apply_raw_event(
+            EventMeta::fixture(3, 0),
+            ProtocolEvent::TicketMinted {
+                ticket_id: 8,
+                market_id: 1,
+                round_id: 1,
+                owner: "So11111111111111111111111111111111111111112".to_owned(),
+                outcome_id: 1,
+                stake_amount: 1_000_000,
+                reward_shares: 1_000_000,
+                entry_odds: 1_000_000,
+                confidence: 80,
+                mood: 1,
+            },
+        )
+        .await
+        .unwrap();
+    engine
+        .apply_raw_event(
+            EventMeta::fixture(4, 0),
+            ProtocolEvent::RoundResolved {
+                market_id: 1,
+                round_id: 1,
+                start_price: 2_000_000_000,
+                end_price: 2_001_000_000,
+                winning_side: "UP".to_owned(),
+                settlement_vault: 1_500_000,
+                payout_per_ticket: 1_500_000,
+                protocol_vault_amount: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+    let app = build_router(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/tickets/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["status"], "won");
+    assert_eq!(json["settlement_value_usdc"], "1500000");
+    assert_eq!(json["realized_pnl_usdc"], "500000");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/tickets/8")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["status"], "lost");
+    assert_eq!(json["settlement_value_usdc"], "0");
+    assert_eq!(json["realized_pnl_usdc"], "-1000000");
+}
+
+#[tokio::test]
+async fn claim_ticket_credits_once_and_rejects_non_owner() {
+    let round_id = 5_666_667;
+    let state = seeded_state_with_price(closed_price_header_for_round(round_id, 200_000_000))
+        .await
+        .with_auth_config(Some(test_auth_config()));
+    seed_cash_ticket(
+        &state,
+        TEST_SOLANA_PUBKEY,
+        90,
+        round_id,
+        "UP",
+        20_000_000,
+        20_000_000,
+    )
+    .await;
+    seed_cash_ticket(
+        &state,
+        "So11111111111111111111111111111111111111112",
+        91,
+        round_id,
+        "DOWN",
+        20_000_000,
+        20_000_000,
+    )
+    .await;
+    let app = build_router(state.clone());
+    let token = format!("Bearer {}", valid_privy_token());
+    let wrong_wallet_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/tickets/90/claim")
+                .header(header::AUTHORIZATION, &token)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "claimer_wallet": "So11111111111111111111111111111111111111112" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_wallet_response.status(), StatusCode::BAD_REQUEST);
+
+    for expected_status in ["claimed", "already_claimed"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/tickets/90/claim")
+                    .header(header::AUTHORIZATION, &token)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({ "claimer_wallet": TEST_SOLANA_PUBKEY }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], expected_status);
+        assert_eq!(json["amount"], "40000000");
+        assert_eq!(json["cash_balance"], "40000000");
+    }
 }
 
 #[tokio::test]

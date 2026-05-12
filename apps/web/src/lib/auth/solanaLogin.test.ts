@@ -4,11 +4,15 @@ import {
   chooseSolanaWalletAuthAction,
   getPrivyAppIdFingerprint,
   resolveStickySolanaWallet,
+  solanaWalletAddressFromPrivyAccount,
   solanaConnectWalletOptions,
   solanaLoginModalOptions,
   solanaWalletList,
   solanaWalletConnectorOptions
 } from './solanaLogin';
+
+const PHANTOM_WALLET = 'So11111111111111111111111111111111111111112';
+const OKX_WALLET = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
 
 describe('solana auth helpers', () => {
   it('disables automatic Solana wallet reconnect attempts', () => {
@@ -42,14 +46,36 @@ describe('solana auth helpers', () => {
     expect(solanaConnectWalletOptions.description).toContain('OKX');
   });
 
-  it('chooses login, link-wallet, or no-op from auth and Solana wallet state', () => {
+  it('chooses login or link-wallet from auth state', () => {
     expect(chooseSolanaWalletAuthAction({ authenticated: false, solanaWalletCount: 0 })).toBe('login');
     expect(chooseSolanaWalletAuthAction({ authenticated: true, solanaWalletCount: 0 })).toBe('linkWallet');
-    expect(chooseSolanaWalletAuthAction({ authenticated: true, solanaWalletCount: 1 })).toBe('none');
+    expect(chooseSolanaWalletAuthAction({ authenticated: true, solanaWalletCount: 1 })).toBe('linkWallet');
+  });
+
+  it('reads Solana wallet addresses from Privy wallet accounts only', () => {
+    expect(solanaWalletAddressFromPrivyAccount({
+      type: 'wallet',
+      chainType: 'solana',
+      address: OKX_WALLET
+    })).toBe(OKX_WALLET);
+    expect(solanaWalletAddressFromPrivyAccount({
+      type: 'wallet',
+      chainType: 'ethereum',
+      address: OKX_WALLET
+    })).toBeNull();
+    expect(solanaWalletAddressFromPrivyAccount({
+      type: 'email',
+      address: OKX_WALLET
+    })).toBeNull();
+    expect(solanaWalletAddressFromPrivyAccount({
+      type: 'wallet',
+      chainType: 'solana',
+      address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    })).toBeNull();
   });
 
   it('selects and sticks to the current Solana wallet address', () => {
-    const wallet = { address: 'So11111111111111111111111111111111111111112' };
+    const wallet = { address: PHANTOM_WALLET };
 
     const state = resolveStickySolanaWallet({
       authenticated: true,
@@ -70,22 +96,60 @@ describe('solana auth helpers', () => {
       authenticated: true,
       wallets: [],
       walletsReady: true,
-      previousAddress: 'So11111111111111111111111111111111111111112'
+      previousAddress: PHANTOM_WALLET
     });
 
     expect(state.wallet).toBeNull();
-    expect(state.address).toBe('So11111111111111111111111111111111111111112');
+    expect(state.address).toBe(PHANTOM_WALLET);
     expect(state.hasSolanaWallet).toBe(true);
     expect(state.resolving).toBe(true);
-    expect(state.nextStickyAddress).toBe('So11111111111111111111111111111111111111112');
+    expect(state.nextStickyAddress).toBe(PHANTOM_WALLET);
+  });
+
+  it('prefers the latest confirmed Solana wallet over an older sticky address', () => {
+    const phantomWallet = { address: PHANTOM_WALLET };
+    const okxWallet = { address: OKX_WALLET };
+
+    const state = resolveStickySolanaWallet({
+      authenticated: true,
+      wallets: [phantomWallet, okxWallet],
+      walletsReady: true,
+      preferredAddress: OKX_WALLET,
+      previousAddress: PHANTOM_WALLET
+    });
+
+    expect(state.wallet).toBe(okxWallet);
+    expect(state.address).toBe(OKX_WALLET);
+    expect(state.hasSolanaWallet).toBe(true);
+    expect(state.resolving).toBe(false);
+    expect(state.nextStickyAddress).toBe(OKX_WALLET);
+  });
+
+  it('keeps a preferred Solana address while its provider wallet is still resolving', () => {
+    const phantomWallet = { address: PHANTOM_WALLET };
+
+    const state = resolveStickySolanaWallet({
+      authenticated: true,
+      wallets: [phantomWallet],
+      walletsReady: true,
+      preferredAddress: OKX_WALLET,
+      previousAddress: PHANTOM_WALLET
+    });
+
+    expect(state.wallet).toBeNull();
+    expect(state.address).toBe(OKX_WALLET);
+    expect(state.hasSolanaWallet).toBe(true);
+    expect(state.resolving).toBe(true);
+    expect(state.nextStickyAddress).toBe(OKX_WALLET);
   });
 
   it('clears the sticky Solana wallet address when unauthenticated', () => {
     const state = resolveStickySolanaWallet({
       authenticated: false,
-      wallets: [{ address: 'So11111111111111111111111111111111111111112' }],
+      wallets: [{ address: PHANTOM_WALLET }],
       walletsReady: true,
-      previousAddress: 'So11111111111111111111111111111111111111112'
+      preferredAddress: OKX_WALLET,
+      previousAddress: PHANTOM_WALLET
     });
 
     expect(state.wallet).toBeNull();
@@ -95,12 +159,9 @@ describe('solana auth helpers', () => {
     expect(state.nextStickyAddress).toBeNull();
   });
 
-  it('maps exited_auth_flow as a retryable Privy wallet modal close', () => {
+  it('returns null for exited_auth_flow so the UI stays silent', () => {
     const error = buildSolanaAuthError('login', 'exited_auth_flow');
-
-    expect(error.title).toBe('Privy cüzdan modalı kapatıldı');
-    expect(error.message).toContain('Solana cüzdanını seçip');
-    expect(error.detail).toBe('exited_auth_flow');
+    expect(error).toBeNull();
   });
 
   it.each([
@@ -110,25 +171,28 @@ describe('solana auth helpers', () => {
   ])('maps Privy Solana readiness errors to the app id/dashboard message', (source) => {
     const error = buildSolanaAuthError('login', source);
 
-    expect(error.title).toBe('Privy Solana girişi kapalı');
-    expect(error.message).toContain('Yanlış Privy app id');
-    expect(error.message).toContain('Solana wallet login kapalı');
+    expect(error).not.toBeNull();
+    expect(error!.title).toBe('Privy Solana girişi kapalı');
+    expect(error!.message).toContain('Yanlış Privy app id');
+    expect(error!.message).toContain('Solana wallet login kapalı');
   });
 
   it('maps invalid SIWS message/nonce to a retryable encoding or nonce message', () => {
     const error = buildSolanaAuthError('login', new Error('Invalid SIWS message and/or nonce'));
 
-    expect(error.title).toBe('SIWS doğrulanamadı');
-    expect(error.message).toBe('SIWS imza formatı/nonce doğrulanamadı. Sayfayı yenileyip tekrar deneyin.');
-    expect(error.detail).toBe('Invalid SIWS message and/or nonce');
+    expect(error).not.toBeNull();
+    expect(error!.title).toBe('SIWS doğrulanamadı');
+    expect(error!.message).toBe('SIWS imza formatı/nonce doğrulanamadı. Sayfayı yenileyip tekrar deneyin.');
+    expect(error!.detail).toBe('Invalid SIWS message and/or nonce');
   });
 
   it('uses Solana-general copy for unexpected wallet modal errors', () => {
     const error = buildSolanaAuthError('login', new Error('Unexpected error'));
 
-    expect(error.title).toBe('Solana cüzdan bağlantısı tamamlanamadı');
-    expect(error.message).toContain('OKX');
-    expect(error.detail).toBe('Unexpected error');
+    expect(error).not.toBeNull();
+    expect(error!.title).toBe('Solana cüzdan bağlantısı tamamlanamadı');
+    expect(error!.message).toContain('OKX');
+    expect(error!.detail).toBe('Unexpected error');
   });
 
   it('builds a safe public Privy app id fingerprint', () => {

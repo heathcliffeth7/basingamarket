@@ -6,11 +6,13 @@ import type { User } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors, useWallets as useSolanaWallets } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { privyAppId, privyClientId, solanaRpcUrl, solanaWsUrl } from '@/lib/api/env';
+import { isSolanaPubkey } from '@/lib/utils/solana';
 import {
   buildSolanaAuthError,
   chooseSolanaWalletAuthAction,
   getPrivyAppIdFingerprint,
   resolveStickySolanaWallet,
+  solanaWalletAddressFromPrivyAccount,
   solanaConnectWalletOptions,
   solanaLoginModalOptions,
   solanaWalletConnectorOptions,
@@ -18,6 +20,47 @@ import {
   type DirectSolanaLoginStatus,
   type SolanaAuthError
 } from './solanaLogin';
+
+const PREFERRED_SOLANA_ADDRESS_KEY = 'bm_preferred_solana_wallet_address';
+const STICKY_SOLANA_ADDRESS_KEY = 'bm_sticky_solana_wallet_address';
+
+function readPersistedAddress(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = localStorage.getItem(key);
+    return stored && isSolanaPubkey(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedAddress(key: string, address: string | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (address) {
+      localStorage.setItem(key, address);
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function clearPersistedAddresses() {
+  writePersistedAddress(PREFERRED_SOLANA_ADDRESS_KEY, null);
+  writePersistedAddress(STICKY_SOLANA_ADDRESS_KEY, null);
+}
+
+export function walletAddressForUser(user: User | null) {
+  if (!user) return null;
+  const authUser = user as unknown as { wallet?: { address?: string }; linkedAccounts?: Array<{ type?: string; address?: string; chainType?: string }> };
+  const addresses = [
+    authUser?.wallet?.address,
+    ...(authUser?.linkedAccounts?.map((account) => account.address) ?? [])
+  ];
+  return addresses.find((address): address is string => Boolean(address && isSolanaPubkey(address))) ?? null;
+}
 
 type AuthContextValue = {
   ready: boolean;
@@ -27,6 +70,7 @@ type AuthContextValue = {
   privyAppIdFingerprint: string;
   authError: SolanaAuthError | null;
   directSolanaLoginStatus: DirectSolanaLoginStatus;
+  walletAddress: string | null;
   solanaWalletAddress: string | null;
   solanaWallet: SolanaWallet | null;
   solanaWalletsReady: boolean;
@@ -47,7 +91,12 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
   const privy = usePrivy();
   const { isOpen: privyModalOpen } = useModalStatus();
   const { ready: solanaWalletsReady, wallets: solanaWallets } = useSolanaWallets();
-  const [stickySolanaWalletAddress, setStickySolanaWalletAddress] = useState<string | null>(null);
+  const [preferredSolanaWalletAddress, setPreferredSolanaWalletAddress] = useState<string | null>(() =>
+    readPersistedAddress(PREFERRED_SOLANA_ADDRESS_KEY)
+  );
+  const [stickySolanaWalletAddress, setStickySolanaWalletAddress] = useState<string | null>(() =>
+    readPersistedAddress(STICKY_SOLANA_ADDRESS_KEY)
+  );
   const [authError, setAuthError] = useState<SolanaAuthError | null>(null);
   const [directSolanaLoginStatus, setDirectSolanaLoginStatus] = useState<DirectSolanaLoginStatus>('idle');
   const loginModalOpened = useRef(false);
@@ -55,6 +104,7 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
     authenticated: privy.authenticated,
     wallets: solanaWallets,
     walletsReady: solanaWalletsReady,
+    preferredAddress: preferredSolanaWalletAddress,
     previousAddress: stickySolanaWalletAddress
   });
   const solanaWallet = stickySolanaWallet.wallet;
@@ -62,29 +112,54 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
   const solanaWalletResolving = stickySolanaWallet.resolving;
   const hasSolanaWallet = stickySolanaWallet.hasSolanaWallet;
   const { login } = useLogin({
-    onComplete: () => {
+    onComplete: ({ loginAccount }) => {
+      const loginAddress = solanaWalletAddressFromPrivyAccount(loginAccount);
+      if (loginAddress) {
+        setPreferredSolanaWalletAddress(loginAddress);
+      }
       setAuthError(null);
       setDirectSolanaLoginStatus('idle');
       loginModalOpened.current = false;
     },
     onError: (error) => {
-      setAuthError(buildSolanaAuthError('login', error));
-      setDirectSolanaLoginStatus('error');
+      const err = buildSolanaAuthError('login', error);
+      setAuthError(err);
+      setDirectSolanaLoginStatus(err ? 'error' : 'idle');
       loginModalOpened.current = false;
     }
   });
   const { linkWallet } = useLinkAccount({
-    onSuccess: () => {
+    onSuccess: ({ linkedAccount }) => {
+      const linkedAddress = solanaWalletAddressFromPrivyAccount(linkedAccount);
+      if (linkedAddress) {
+        setPreferredSolanaWalletAddress(linkedAddress);
+      }
       setAuthError(null);
       setDirectSolanaLoginStatus('idle');
       loginModalOpened.current = false;
     },
     onError: (error) => {
-      setAuthError(buildSolanaAuthError('link', error));
-      setDirectSolanaLoginStatus('error');
+      const err = buildSolanaAuthError('link', error);
+      setAuthError(err);
+      setDirectSolanaLoginStatus(err ? 'error' : 'idle');
       loginModalOpened.current = false;
     }
   });
+
+  useEffect(() => {
+    if (privy.authenticated) return;
+    setPreferredSolanaWalletAddress(null);
+    setStickySolanaWalletAddress(null);
+    clearPersistedAddresses();
+  }, [privy.authenticated]);
+
+  useEffect(() => {
+    writePersistedAddress(PREFERRED_SOLANA_ADDRESS_KEY, preferredSolanaWalletAddress);
+  }, [preferredSolanaWalletAddress]);
+
+  useEffect(() => {
+    writePersistedAddress(STICKY_SOLANA_ADDRESS_KEY, stickySolanaWalletAddress);
+  }, [stickySolanaWalletAddress]);
 
   useEffect(() => {
     if (directSolanaLoginStatus !== 'opening') return;
@@ -119,10 +194,6 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
       authenticated: privy.authenticated,
       solanaWalletCount: hasSolanaWallet ? 1 : 0
     });
-    if (authAction === 'none') {
-      setDirectSolanaLoginStatus('idle');
-      return;
-    }
 
     setDirectSolanaLoginStatus('opening');
     try {
@@ -132,10 +203,23 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
         linkWallet(solanaConnectWalletOptions);
       }
     } catch (error) {
-      setAuthError(buildSolanaAuthError(authAction === 'linkWallet' ? 'link' : 'login', error));
-      setDirectSolanaLoginStatus('error');
+      const err = buildSolanaAuthError(authAction === 'linkWallet' ? 'link' : 'login', error);
+      setAuthError(err);
+      setDirectSolanaLoginStatus(err ? 'error' : 'idle');
     }
   }, [hasSolanaWallet, linkWallet, login, privy.authenticated]);
+
+  const logout = useCallback(async () => {
+    setPreferredSolanaWalletAddress(null);
+    setStickySolanaWalletAddress(null);
+    clearPersistedAddresses();
+    setAuthError(null);
+    setDirectSolanaLoginStatus('idle');
+    loginModalOpened.current = false;
+    await privy.logout();
+  }, [privy]);
+
+  const walletAddress = solanaWalletAddress ?? walletAddressForUser(privy.user);
 
   const value = useMemo(
     () => ({
@@ -146,6 +230,7 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
       privyAppIdFingerprint,
       authError,
       directSolanaLoginStatus,
+      walletAddress,
       solanaWalletAddress,
       solanaWallet,
       solanaWalletsReady,
@@ -153,7 +238,7 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
       hasSolanaWallet,
       loginSolana,
       clearAuthError,
-      logout: () => privy.logout(),
+      logout,
       getAccessToken: () => privy.getAccessToken()
     }),
     [
@@ -162,9 +247,11 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
       directSolanaLoginStatus,
       hasSolanaWallet,
       loginSolana,
+      logout,
       privy,
       solanaWallet,
       solanaWalletAddress,
+      walletAddress,
       solanaWalletResolving,
       solanaWalletsReady
     ]
@@ -188,6 +275,7 @@ function LocalAuthProvider({ children }: { children: ReactNode }) {
         privyAppIdFingerprint,
         authError: null,
         directSolanaLoginStatus: 'idle',
+        walletAddress: null,
         solanaWalletAddress: null,
         solanaWallet: null,
         solanaWalletsReady: true,

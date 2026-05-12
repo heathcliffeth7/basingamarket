@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   address,
@@ -34,6 +34,8 @@ import { encodeDepositSignature } from './signature';
 
 type DepositButtonProps = {
   walletAddress: string;
+  renderTrigger?: (open: () => void, label: string) => ReactNode;
+  openRequest?: number;
 };
 
 type DepositView = 'home' | 'wallet-assets' | 'wallet-amount' | 'transfer';
@@ -41,10 +43,11 @@ type DepositSource = 'wallet' | 'transfer';
 
 const DEPOSIT_VERIFY_RETRY_DELAYS_MS = [1200, 1800, 2500];
 
-export default function DepositButton({ walletAddress }: DepositButtonProps) {
+export default function DepositButton({ walletAddress, renderTrigger, openRequest = 0 }: DepositButtonProps) {
   const queryClient = useQueryClient();
   const { getAccessToken, solanaWallet, solanaWalletsReady, solanaWalletResolving } = useAuth();
   const { signAndSendTransaction } = useSignAndSendTransaction();
+  const lastOpenRequestRef = useRef(0);
   const [isOpen, setIsOpen] = useState(false);
   const [view, setView] = useState<DepositView>('home');
   const [source, setSource] = useState<DepositSource>('wallet');
@@ -237,6 +240,12 @@ export default function DepositButton({ walletAddress }: DepositButtonProps) {
     setIsOpen(true);
   }
 
+  useEffect(() => {
+    if (!openRequest || openRequest === lastOpenRequestRef.current) return;
+    lastOpenRequestRef.current = openRequest;
+    openDeposit();
+  }, [openRequest]);
+
   function selectWalletAsset(nextAsset: TransferDepositAsset) {
     setSource('wallet');
     setAsset(nextAsset);
@@ -266,15 +275,19 @@ export default function DepositButton({ walletAddress }: DepositButtonProps) {
 
   return (
     <>
-      <button
-        type="button"
-        className="inline-flex h-9 items-center gap-2 rounded-full border border-market-positive/45 bg-market-positive/10 px-4 text-sm font-black text-terminal-text transition hover:border-market-positive/70 hover:bg-market-positive/18 disabled:cursor-not-allowed disabled:border-terminal-line disabled:bg-terminal-panel disabled:text-terminal-muted"
-        aria-label="Deposit"
-        disabled={configQuery.isLoading}
-        onClick={openDeposit}
-      >
-        <Wallet size={16} /> {buttonLabel}
-      </button>
+      {renderTrigger ? (
+        renderTrigger(openDeposit, buttonLabel)
+      ) : (
+        <button
+          type="button"
+          className="inline-flex h-9 items-center gap-2 rounded-full border border-market-positive/45 bg-market-positive/10 px-4 text-sm font-black text-terminal-text transition hover:border-market-positive/70 hover:bg-market-positive/18 disabled:cursor-not-allowed disabled:border-terminal-line disabled:bg-terminal-panel disabled:text-terminal-muted"
+          aria-label="Deposit"
+          disabled={configQuery.isLoading}
+          onClick={openDeposit}
+        >
+          <Wallet size={16} /> {buttonLabel}
+        </button>
+      )}
 
       {isOpen ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm" role="presentation">

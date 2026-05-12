@@ -46,6 +46,7 @@ async fn seeded_app() -> axum::Router {
             ProtocolEvent::TicketMinted {
                 ticket_id: 1,
                 market_id: 1,
+                round_id: 1,
                 owner: UP_OWNER.to_owned(),
                 outcome_id: 0,
                 stake_amount: 100 * SCALE,
@@ -63,6 +64,7 @@ async fn seeded_app() -> axum::Router {
             ProtocolEvent::TicketMinted {
                 ticket_id: 2,
                 market_id: 1,
+                round_id: 1,
                 owner: DOWN_OWNER.to_owned(),
                 outcome_id: 1,
                 stake_amount: 50 * SCALE,

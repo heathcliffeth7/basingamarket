@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, ChevronDown, RefreshCcw, Search, UserRound, Wallet, X } from 'lucide-react';
-import { type ReactNode } from 'react';
+import { Bell, ChevronDown, Copy, RefreshCcw, Search, User, Wallet, X } from 'lucide-react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { cashBalanceQueryOptions } from '@/lib/api/cashBalanceQuery';
 import { isMockFallbackEnabled } from '@/lib/api/env';
 import { useAuth } from '@/lib/auth/privy';
@@ -14,7 +14,6 @@ import WithdrawButton from '@/lib/components/withdraw/WithdrawButton';
 import Button from '@/lib/components/ui/Button';
 import LiveConnectionBadge from '@/lib/components/market/LiveConnectionBadge';
 import { cashDisplayValue } from '@/lib/utils/cash';
-import { isSolanaPubkey } from '@/lib/utils/solana';
 
 export const marketCategories = [
   { label: 'Trending', href: '/markets' },
@@ -23,17 +22,6 @@ export const marketCategories = [
   { label: 'Crypto', href: '/markets?category=crypto' },
   { label: 'Finance', href: '/markets' }
 ];
-const fallbackProfileHref = '/profiles/4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-
-function walletAddressForUser(user: unknown) {
-  const authUser = user as { wallet?: { address?: string }; linkedAccounts?: Array<{ type?: string; address?: string; chainType?: string }> } | null;
-  const addresses = [
-    authUser?.wallet?.address,
-    ...(authUser?.linkedAccounts?.map((account) => account.address) ?? [])
-  ];
-
-  return addresses.find((address): address is string => Boolean(address && isSolanaPubkey(address)));
-}
 
 type HeaderCashQueryLike = Parameters<typeof cashDisplayValue>[0];
 
@@ -66,10 +54,17 @@ export function authNoticeCopy(authError: SolanaAuthError | null | undefined, di
   };
 }
 
+export function shortWalletAddress(address?: string | null) {
+  if (!address) return 'No wallet';
+  return `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
+
 export function AuthenticatedHeaderControls({
   cashValue,
   walletAddress,
-  profileHref,
+  onSwitchWallet,
+  onLogin,
+  switchWalletDisabled = false,
   onLogout,
   compact = false,
   mintNode,
@@ -78,7 +73,9 @@ export function AuthenticatedHeaderControls({
 }: {
   cashValue: string;
   walletAddress?: string | null;
-  profileHref: string;
+  onSwitchWallet?: () => void;
+  onLogin?: () => void;
+  switchWalletDisabled?: boolean;
   onLogout?: () => void;
   compact?: boolean;
   mintNode?: ReactNode;
@@ -99,8 +96,6 @@ export function AuthenticatedHeaderControls({
       </button>
     )
   );
-  const depositControl = depositNode ?? (walletAddress ? <DepositButton walletAddress={walletAddress} /> : null);
-  const withdrawControl = withdrawNode ?? (walletAddress ? <WithdrawButton walletAddress={walletAddress} /> : null);
 
   return (
     <>
@@ -109,30 +104,24 @@ export function AuthenticatedHeaderControls({
         compact={compact}
       />
       {mintControl}
-      {depositControl}
-      {withdrawControl}
       {!compact ? (
         <button className="text-terminal-muted hover:text-terminal-text" type="button" aria-label="Notifications">
           <Bell size={19} />
         </button>
       ) : null}
-      <Link
-        href={profileHref}
-        className={compact
-          ? 'grid h-8 w-8 place-items-center rounded-full border border-terminal-line bg-terminal-panel-strong text-terminal-text'
-          : 'flex items-center gap-2'}
-        aria-label="Profile"
-      >
-        <span className={compact ? '' : 'grid h-9 w-9 place-items-center rounded-full border border-terminal-line bg-terminal-panel-strong text-terminal-text'}>
-          <UserRound size={17} />
-        </span>
-        {!compact ? <ChevronDown size={14} className="text-terminal-muted" /> : null}
-      </Link>
-      {!compact ? (
-        <Button className="h-9 px-4 text-sm" variant="ghost" onClick={onLogout}>
-          Logout
-        </Button>
-      ) : null}
+      {walletAddress ? (
+        <WalletAccountMenu
+          compact={compact}
+          disabled={switchWalletDisabled}
+          onLogout={onLogout}
+          onSwitchWallet={onSwitchWallet}
+          walletAddress={walletAddress}
+          depositNode={depositNode}
+          withdrawNode={withdrawNode}
+        />
+      ) : (
+        <WalletLoginControl compact={compact} disabled={switchWalletDisabled || !onLogin} onLogin={onLogin} />
+      )}
     </>
   );
 }
@@ -169,23 +158,219 @@ function BusdcBalancePill({
   );
 }
 
+function WalletAccountMenu({
+  compact,
+  disabled,
+  onLogout,
+  onSwitchWallet,
+  walletAddress,
+  depositNode,
+  withdrawNode
+}: {
+  compact: boolean;
+  disabled: boolean;
+  onLogout?: () => void;
+  onSwitchWallet?: () => void;
+  walletAddress: string;
+  depositNode?: ReactNode;
+  withdrawNode?: ReactNode;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [depositHostMounted, setDepositHostMounted] = useState(false);
+  const [withdrawHostMounted, setWithdrawHostMounted] = useState(false);
+  const [depositOpenRequest, setDepositOpenRequest] = useState(0);
+  const [withdrawOpenRequest, setWithdrawOpenRequest] = useState(0);
+
+  function closeMenu() {
+    setMenuOpen(false);
+  }
+
+  async function copyAddress() {
+    try {
+      await navigator.clipboard.writeText(walletAddress);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+    closeMenu();
+  }
+
+  function openDepositFromMenu() {
+    closeMenu();
+    setDepositHostMounted(true);
+    setDepositOpenRequest((request) => request + 1);
+  }
+
+  function openWithdrawFromMenu() {
+    closeMenu();
+    setWithdrawHostMounted(true);
+    setWithdrawOpenRequest((request) => request + 1);
+  }
+
+  useEffect(() => {
+    function handleDocClick(event: MouseEvent) {
+      const target = event.target as Node;
+      if (containerRef.current && !containerRef.current.contains(target)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) {
+      document.addEventListener('mousedown', handleDocClick);
+      return () => document.removeEventListener('mousedown', handleDocClick);
+    }
+  }, [menuOpen]);
+
+  return (
+    <div ref={containerRef} className="relative shrink-0">
+      {!depositNode && depositHostMounted ? (
+        <DepositButton
+          walletAddress={walletAddress}
+          openRequest={depositOpenRequest}
+          renderTrigger={() => null}
+        />
+      ) : null}
+      {!withdrawNode && withdrawHostMounted ? (
+        <WithdrawButton
+          walletAddress={walletAddress}
+          openRequest={withdrawOpenRequest}
+          renderTrigger={() => null}
+        />
+      ) : null}
+      <button
+        type="button"
+        aria-expanded={menuOpen}
+        aria-haspopup="menu"
+        aria-disabled={disabled || undefined}
+        aria-label="Active wallet"
+        className={compact
+          ? 'inline-flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-full border border-terminal-line bg-terminal-panel-strong text-terminal-text transition hover:border-terminal-line-strong hover:bg-terminal-elevated aria-disabled:pointer-events-none aria-disabled:opacity-45'
+          : 'inline-flex h-10 min-w-[132px] cursor-pointer list-none items-center justify-center gap-2 rounded-lg border border-terminal-line bg-terminal-panel px-3 text-left transition hover:border-terminal-line-strong hover:bg-terminal-panel-strong aria-disabled:pointer-events-none aria-disabled:opacity-45'}
+        onClick={() => {
+          if (!disabled) setMenuOpen((prev) => !prev);
+        }}
+      >
+        <Wallet size={compact ? 15 : 15} className="shrink-0 text-terminal-muted" aria-hidden="true" />
+        {!compact ? (
+          <>
+            <span className="min-w-0">
+              <span className="block truncate text-[10px] font-semibold text-terminal-muted">Wallet</span>
+              <span className="block truncate font-mono text-xs font-black text-terminal-text">{shortWalletAddress(walletAddress)}</span>
+            </span>
+            <ChevronDown size={13} className={`shrink-0 text-terminal-muted transition-transform ${menuOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </>
+        ) : null}
+      </button>
+      {menuOpen ? (
+        <div className="absolute right-0 top-[calc(100%+8px)] z-40 min-w-[192px] rounded-lg border border-terminal-line bg-terminal-panel p-1.5 shadow-2xl" role="menu">
+          <Link
+            href={`/profiles/${walletAddress}`}
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-bold text-terminal-text hover:bg-terminal-panel-strong"
+            onClick={() => setMenuOpen(false)}
+          >
+            <User size={13} className="shrink-0 text-terminal-muted" />
+            Profile
+          </Link>
+          <div className="my-1 border-t border-terminal-line" />
+          {depositNode ?? (
+            <button
+              type="button"
+              className="block w-full rounded-md px-3 py-2 text-left text-xs font-bold text-terminal-text hover:bg-terminal-panel-strong"
+              onClick={(event) => {
+                event.stopPropagation();
+                openDepositFromMenu();
+              }}
+            >
+              Deposit
+            </button>
+          )}
+          {withdrawNode ?? (
+            <button
+              type="button"
+              className="block w-full rounded-md px-3 py-2 text-left text-xs font-bold text-terminal-text hover:bg-terminal-panel-strong"
+              onClick={(event) => {
+                event.stopPropagation();
+                openWithdrawFromMenu();
+              }}
+            >
+              Withdraw
+            </button>
+          )}
+          <div className="my-1 border-t border-terminal-line" />
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-bold text-terminal-text hover:bg-terminal-panel-strong disabled:cursor-not-allowed disabled:text-terminal-muted"
+            disabled={disabled || !onSwitchWallet}
+            onClick={() => {
+              closeMenu();
+              onSwitchWallet?.();
+            }}
+          >
+            Switch wallet
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-bold text-terminal-text hover:bg-terminal-panel-strong"
+            onClick={copyAddress}
+          >
+            <Copy size={12} className="shrink-0 text-terminal-muted" />
+            {copied ? 'Copied!' : 'Copy address'}
+          </button>
+          <button
+            type="button"
+            className="block w-full rounded-md px-3 py-2 text-left text-xs font-bold text-terminal-muted hover:bg-terminal-panel-strong hover:text-terminal-text disabled:cursor-not-allowed disabled:text-terminal-muted"
+            disabled={!onLogout}
+            onClick={() => {
+              closeMenu();
+              onLogout?.();
+            }}
+          >
+            Logout
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WalletLoginControl({
+  compact,
+  disabled,
+  onLogin
+}: {
+  compact: boolean;
+  disabled: boolean;
+  onLogin?: () => void;
+}) {
+  return (
+    <Button
+      aria-label="Login"
+      className={compact ? 'h-8 px-3 text-xs' : 'h-9 px-4 text-sm'}
+      disabled={disabled}
+      onClick={onLogin}
+      variant="secondary"
+    >
+      Login
+    </Button>
+  );
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const {
     ready,
     authenticated,
-    user,
     privyConfigured,
     privyAppIdFingerprint,
     authError,
     directSolanaLoginStatus,
-    solanaWalletAddress,
+    walletAddress,
     loginSolana,
     clearAuthError,
     logout
   } = useAuth();
   const isAuthenticated = ready && authenticated;
-  const walletAddress = solanaWalletAddress ?? walletAddressForUser(user);
-  const profileHref = walletAddress ? `/profiles/${walletAddress}` : fallbackProfileHref;
   const authCtaDisabled = !ready || !privyConfigured;
   const directLoginBusy = directSolanaLoginStatus === 'opening';
   const { title: authNoticeTitle, message: authNoticeMessage } = authNoticeCopy(authError, directSolanaLoginStatus);
@@ -218,14 +403,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <AuthenticatedHeaderControls
                 cashValue={cashValue}
                 walletAddress={walletAddress}
-                profileHref={profileHref}
+                onLogin={() => void loginSolana()}
+                onSwitchWallet={() => void loginSolana()}
+                switchWalletDisabled={authCtaDisabled || directLoginBusy}
                 onLogout={() => void logout()}
               />
             ) : (
-              <div className="flex items-center gap-2">
-                <Button className="h-9 px-4 text-sm" variant="secondary" onClick={() => void loginSolana()} disabled={authCtaDisabled}>Login</Button>
-                <Button className="h-9 px-4 text-sm" onClick={() => void loginSolana()} disabled={authCtaDisabled}>Sign up</Button>
-              </div>
+              <WalletLoginControl compact={false} disabled={authCtaDisabled} onLogin={() => void loginSolana()} />
             )}
           </div>
 
@@ -233,16 +417,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
             {isMockFallbackEnabled ? <LiveConnectionBadge status="mock" label="Mock" /> : null}
             <LiveConnectionBadge status="live" label="Live" />
             {!isAuthenticated ? (
-              <>
-                <Button className="h-8 px-3 text-xs" variant="secondary" onClick={() => void loginSolana()} disabled={authCtaDisabled}>Login</Button>
-                <Button className="h-8 px-3 text-xs" onClick={() => void loginSolana()} disabled={authCtaDisabled}>Sign up</Button>
-              </>
+              <WalletLoginControl compact disabled={authCtaDisabled} onLogin={() => void loginSolana()} />
             ) : (
               <AuthenticatedHeaderControls
                 compact
                 cashValue={cashValue}
                 walletAddress={walletAddress}
-                profileHref={profileHref}
+                onLogin={() => void loginSolana()}
+                onSwitchWallet={() => void loginSolana()}
+                switchWalletDisabled={authCtaDisabled || directLoginBusy}
+                onLogout={() => void logout()}
               />
             )}
           </div>

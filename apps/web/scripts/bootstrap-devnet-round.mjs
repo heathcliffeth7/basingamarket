@@ -172,20 +172,10 @@ export async function deriveDevnetPdas(programId, marketId, roundId) {
     programAddress,
     seeds: [utf8Bytes('round'), addressBytes(market), u64Bytes(roundId)]
   });
-  const [openingAggregateUp] = await getProgramDerivedAddress({
-    programAddress,
-    seeds: [utf8Bytes('opening_aggregate'), addressBytes(round), utf8Bytes('up')]
-  });
-  const [openingAggregateDown] = await getProgramDerivedAddress({
-    programAddress,
-    seeds: [utf8Bytes('opening_aggregate'), addressBytes(round), utf8Bytes('down')]
-  });
 
   return {
     global,
     market,
-    openingAggregateDown,
-    openingAggregateUp,
     round
   };
 }
@@ -380,8 +370,6 @@ export async function bootstrapDevnetRound(options) {
         authority: payer.address,
         global: pdas.global,
         market: pdas.market,
-        openingAggregateDown: pdas.openingAggregateDown,
-        openingAggregateUp: pdas.openingAggregateUp,
         programId,
         round: pdas.round,
         roundId: windowAfterWait.roundId,
@@ -481,8 +469,6 @@ function openRoundInstruction({
   authority,
   global,
   market,
-  openingAggregateDown,
-  openingAggregateUp,
   programId,
   round,
   roundId,
@@ -500,8 +486,6 @@ function openRoundInstruction({
       readonly(global, false),
       readonly(market, false),
       writable(round, false),
-      writable(openingAggregateUp, false),
-      writable(openingAggregateDown, false),
       writable(authority, true),
       readonly(SYSTEM_PROGRAM_ADDRESS, false)
     ],
@@ -546,7 +530,15 @@ async function sendInstructions({ instructions, payer, rpc, rpcSubscriptions }) 
   );
   const signedTransaction = await signTransactionMessageWithSigners(message);
   const sendAndConfirm = sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions });
-  await sendAndConfirm(signedTransaction, { commitment: 'confirmed' });
+  try {
+    await sendAndConfirm(signedTransaction, { commitment: 'confirmed' });
+  } catch (error) {
+    console.error('Transaction failed:', error);
+    if (error && typeof error === 'object' && 'context' in error) {
+      console.error('Error context:', JSON.stringify((error).context, null, 2));
+    }
+    throw error;
+  }
   return getSignatureFromTransaction(signedTransaction);
 }
 

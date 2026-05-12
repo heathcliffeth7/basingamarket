@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 
 use crate::{
-    BusdcMintRow, CashBalanceRow, CashBidRow, CashDepositRow, CashResaleRow,
-    CashTradeReservationRow, CashTradeRow, CashWithdrawalQuoteRow, CashWithdrawalRow, DbError,
-    InMemoryProjectionStore, SolDepositQuoteRow, SolDepositRow, TransferDepositQuoteRow,
-    TransferDepositRow,
+    memory::rebuild_cash_ticket_projection_from_snapshot, BusdcMintRow, CashBalanceRow, CashBidRow,
+    CashDepositRow, CashResaleRow, CashTradeReservationRow, CashTradeRow, CashWithdrawalQuoteRow,
+    CashWithdrawalRow, DbError, InMemoryProjectionStore, PayoutClaimRow, SolDepositQuoteRow,
+    SolDepositRow, TransferDepositQuoteRow, TransferDepositRow,
 };
 
 const CASH_PROJECTION_SNAPSHOT_VERSION: u32 = 1;
@@ -26,6 +26,8 @@ pub struct CashProjectionSnapshot {
     pub cash_bids: Vec<CashBidRow>,
     #[serde(default)]
     pub cash_resales: Vec<CashResaleRow>,
+    #[serde(default)]
+    pub payout_claims: Vec<PayoutClaimRow>,
     pub cash_deposits: Vec<CashDepositRow>,
     pub sol_deposit_quotes: Vec<SolDepositQuoteRow>,
     pub sol_deposits: Vec<SolDepositRow>,
@@ -38,6 +40,8 @@ pub struct CashProjectionSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EventMeta;
+    use basingamarket_domain::TicketStatus;
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -159,6 +163,89 @@ mod tests {
             995_000
         );
         assert_eq!(reloaded.cash_trade_side_volume(2, 5928349, "UP").await, 0);
+        let ticket = reloaded.get_ticket(42).await.unwrap();
+        assert_eq!(ticket.market_id, 1);
+        assert_eq!(ticket.round_id, 5928349);
+        assert_eq!(ticket.current_owner, TEST_OWNER);
+        assert_eq!(ticket.reward_shares, 1_900_000);
+
+        let _ = fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn cash_snapshot_preserves_claim_idempotency() {
+        let path = std::env::temp_dir().join(format!(
+            "basingamarket-cash-claim-projection-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = InMemoryProjectionStore::default();
+        let now = Utc::now();
+        store
+            .upsert_cash_balance(CashBalanceRow {
+                wallet_address: TEST_OWNER.to_owned(),
+                cash_balance: 1_000_000,
+                updated_at: now,
+            })
+            .await;
+        store
+            .reserve_cash_trade(CashTradeReservationRow {
+                trade_id: "trade-claim".to_owned(),
+                wallet_address: TEST_OWNER.to_owned(),
+                amount: 1_000_000,
+                released: false,
+                completed_signature: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+        store
+            .record_cash_trade(CashTradeRow {
+                trade_id: "trade-claim".to_owned(),
+                wallet_address: TEST_OWNER.to_owned(),
+                signature: "cash-buy-claim".to_owned(),
+                mint: TEST_OWNER.to_owned(),
+                vault_token_account: TEST_TREASURY.to_owned(),
+                market_id: 1,
+                round_id: 5928474,
+                position_lot: "lot-claim".to_owned(),
+                lot_id: 77,
+                side: "UP".to_owned(),
+                usdc_in: 1_000_000,
+                fee_usdc: 5_000,
+                net_usdc: 995_000,
+                tickets_out: 1_900_000,
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        store
+            .claim_ticket_to_cash(
+                77,
+                TEST_OWNER.to_owned(),
+                995_000,
+                &EventMeta::fixture(8, 0),
+            )
+            .await
+            .unwrap();
+
+        store.save_cash_projection_snapshot(&path).await.unwrap();
+        let reloaded = InMemoryProjectionStore::default();
+        assert!(reloaded.load_cash_projection_snapshot(&path).await.unwrap());
+        let ticket = reloaded.get_ticket(77).await.unwrap();
+        assert!(ticket.claimed);
+        assert_eq!(ticket.status, TicketStatus::Claimed);
+        assert_eq!(ticket.settlement_value_usdc, Some(995_000));
+        let duplicate = reloaded
+            .claim_ticket_to_cash(
+                77,
+                TEST_OWNER.to_owned(),
+                995_000,
+                &EventMeta::fixture(9, 0),
+            )
+            .await
+            .unwrap();
+        assert!(!duplicate.credited);
 
         let _ = fs::remove_file(path).await;
     }
@@ -269,7 +356,10 @@ mod tests {
         .unwrap();
         snapshot.cash_trades[0].market_id = 0;
         let store = InMemoryProjectionStore::default();
-        store.replace_cash_projection_snapshot(snapshot).await;
+        store
+            .replace_cash_projection_snapshot(snapshot)
+            .await
+            .unwrap();
 
         assert_eq!(store.cash_trade_side_volume(1, 5928349, "UP").await, 0);
         let count = store
@@ -297,6 +387,7 @@ impl InMemoryProjectionStore {
             cash_trades: state.cash_trades.values().cloned().collect(),
             cash_bids: state.cash_bids.values().cloned().collect(),
             cash_resales: state.cash_resales.values().cloned().collect(),
+            payout_claims: state.payout_claims.values().cloned().collect(),
             cash_deposits: state.cash_deposits.values().cloned().collect(),
             sol_deposit_quotes: state.sol_deposit_quotes.values().cloned().collect(),
             sol_deposits: state.sol_deposits.values().cloned().collect(),
@@ -307,7 +398,10 @@ impl InMemoryProjectionStore {
         }
     }
 
-    pub async fn replace_cash_projection_snapshot(&self, snapshot: CashProjectionSnapshot) {
+    pub async fn replace_cash_projection_snapshot(
+        &self,
+        snapshot: CashProjectionSnapshot,
+    ) -> Result<(), DbError> {
         let mut state = self.state.write().await;
         state.cash_balances = snapshot
             .cash_balances
@@ -338,6 +432,11 @@ impl InMemoryProjectionStore {
             .cash_resales
             .into_iter()
             .map(|row| (row.signature.clone(), row))
+            .collect();
+        state.payout_claims = snapshot
+            .payout_claims
+            .into_iter()
+            .map(|row| (row.ticket_id, row))
             .collect();
         state.cash_deposits = snapshot
             .cash_deposits
@@ -374,6 +473,8 @@ impl InMemoryProjectionStore {
             .into_iter()
             .map(|row| (row.vault_signature.clone(), row))
             .collect();
+        rebuild_cash_ticket_projection_from_snapshot(&mut state)?;
+        Ok(())
     }
 
     pub async fn load_cash_projection_snapshot(
@@ -386,7 +487,7 @@ impl InMemoryProjectionStore {
             Err(error) => return Err(error.into()),
         };
         let snapshot = serde_json::from_slice::<CashProjectionSnapshot>(&bytes)?;
-        self.replace_cash_projection_snapshot(snapshot).await;
+        self.replace_cash_projection_snapshot(snapshot).await?;
         Ok(true)
     }
 

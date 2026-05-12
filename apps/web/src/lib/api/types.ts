@@ -133,7 +133,7 @@ export const CanvasNodeSchema = z.object({
   listed: z.boolean(),
   listed_price: z.string().optional().nullable(),
   last_transfer_at: z.string().optional().nullable(),
-  status: z.enum(['active', 'listed', 'won', 'lost', 'claimed'])
+  status: z.enum(['active', 'listed', 'won', 'lost', 'refundable', 'claimed'])
 });
 
 export const CanvasResponseSchema = z.object({
@@ -149,7 +149,9 @@ export const CanvasResponseSchema = z.object({
 export const TicketSchema = z.object({
   ticket_id: z.string(),
   market_id: z.string(),
+  round_id: z.string().optional().default(''),
   outcome_id: z.number(),
+  token_name: z.string().optional(),
   original_caller: z.string(),
   current_owner: z.string(),
   stake_amount: z.string(),
@@ -161,10 +163,18 @@ export const TicketSchema = z.object({
   settlement_value_usdc: z.string().optional().nullable(),
   realized_pnl_usdc: z.string().optional().nullable(),
   listed_price: z.string().optional().nullable(),
-  status: z.string(),
+  status: z.enum(['active', 'listed', 'won', 'lost', 'refundable', 'claimed']),
   claimed: z.boolean(),
   confidence: z.number(),
   mood: z.number()
+});
+
+export const ClaimTicketSchema = z.object({
+  status: z.enum(['claimed', 'already_claimed']),
+  ticket_id: z.string(),
+  amount: z.string(),
+  cash_balance: z.string(),
+  ticket: TicketSchema
 });
 
 export const BuyIntentInstructionAccountSchema = z.object({
@@ -529,6 +539,7 @@ export type CanvasRegion = z.infer<typeof CanvasRegionSchema>;
 export type CanvasNode = z.infer<typeof CanvasNodeSchema>;
 export type CanvasResponse = z.infer<typeof CanvasResponseSchema>;
 export type Ticket = z.infer<typeof TicketSchema>;
+export type ClaimTicket = z.infer<typeof ClaimTicketSchema>;
 export type BuyIntent = z.infer<typeof BuyIntentSchema>;
 export type BuyIntentInstructionAccount = z.infer<typeof BuyIntentInstructionAccountSchema>;
 export type CashBuy = z.infer<typeof CashBuySchema>;

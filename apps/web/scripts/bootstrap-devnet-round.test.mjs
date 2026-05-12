@@ -71,8 +71,6 @@ describe('bootstrap-devnet-round script helpers', () => {
     await expect(deriveDevnetPdas(PROGRAM_ID, 1, 5_928_316)).resolves.toMatchObject({
       global: '5k2zQuYhuk6UvJDkw142Nz9AiAgoSjkFdGbhdUu5KEK1',
       market: '5xNWrfYTiKo8t4PRqioUHw9Qbg86rUX4253u7qqKzmVv',
-      openingAggregateDown: '4eTnsy5EBDQE1Zeco97mEHdCTdvZU2vDFXqbN6YE3z14',
-      openingAggregateUp: 'Du2vHtELXyMX8U3SgZvUpGGbJC7SLB9zw7ikqCgjziCb',
       round: '7P2pUYsMRLZYw3tThZujmL8t72vGKx8UJP7LwR2F6kgn'
     });
   });

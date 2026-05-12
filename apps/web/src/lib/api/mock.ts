@@ -545,7 +545,9 @@ export const mockTickets: Ticket[] = [
   {
     ticket_id: '1',
     market_id: '1',
+    round_id: '5666667',
     outcome_id: 0,
+    token_name: 'btc-updown-5m-1700000100-up',
     original_caller: mockWalletAddress,
     current_owner: mockWalletAddress,
     stake_amount: '75000000',
@@ -565,7 +567,9 @@ export const mockTickets: Ticket[] = [
   {
     ticket_id: '2',
     market_id: '1',
+    round_id: '5666667',
     outcome_id: 0,
+    token_name: 'btc-updown-5m-1700000100-up',
     original_caller: mockCallerAddress,
     current_owner: mockTraderAddress,
     stake_amount: '110000000',
@@ -585,7 +589,9 @@ export const mockTickets: Ticket[] = [
   {
     ticket_id: '3',
     market_id: '1',
+    round_id: '5666667',
     outcome_id: 1,
+    token_name: 'btc-updown-5m-1700000100-down',
     original_caller: mockCallerAddress,
     current_owner: mockCallerAddress,
     stake_amount: '68000000',

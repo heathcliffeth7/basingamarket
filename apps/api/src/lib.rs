@@ -9,7 +9,9 @@ mod error;
 mod health;
 mod http_config;
 mod metrics;
+mod profile_tickets;
 mod protocol_markets;
+mod round_settlement;
 mod secondary_resale;
 mod sol_deposit_price;
 mod trade_intent;
@@ -31,11 +33,11 @@ use basingamarket_auth::{
 };
 use basingamarket_chain::{decode_solana_pubkey, derive_program_address, SolanaDevnetConfig};
 use basingamarket_db::{
-    CanvasObjectRow, CashBalanceRow, CashTradeRow, InMemoryProjectionStore, MarketRow, OutcomeRow,
-    ShareCardRow, ShareCardStatus, TicketRow,
+    CanvasObjectRow, CashBalanceRow, CashTradeRow, EventMeta, InMemoryProjectionStore, MarketRow,
+    OutcomeRow, ShareCardRow, ShareCardStatus, TicketClaimResult, TicketRow,
 };
 use basingamarket_domain::{
-    crypto_rounds::{all_protocol_stream_configs, MarketStreamConfig},
+    crypto_rounds::{all_protocol_stream_configs, round_window, MarketStreamConfig},
     MarketStatus, TicketStatus,
 };
 use basingamarket_market_data::binance::{
@@ -44,11 +46,12 @@ use basingamarket_market_data::binance::{
 use basingamarket_realtime::{
     topics, CacheKey, EventEnvelope, EventPublisher, MemoryCache, MemoryEventBus,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 pub(crate) use error::ApiError;
+use round_settlement::settle_market_round_if_ready;
 pub use sol_deposit_price::SolDepositPriceProvider;
 
 #[derive(Debug, Clone)]
@@ -220,6 +223,20 @@ impl MarketPriceProvider {
             Self::Binance(client) => binance_price_header_for_market(client, market).await,
         }
     }
+
+    async fn price_header_for_market_round(
+        &self,
+        market: &MarketRow,
+        round_id: u64,
+    ) -> Option<MarketPriceHeaderResponse> {
+        match self {
+            Self::Disabled => None,
+            Self::Static(prices) => prices.get(&market.market_id).cloned(),
+            Self::Binance(client) => {
+                binance_price_header_for_market_round(client, market, round_id).await
+            }
+        }
+    }
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -247,6 +264,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/markets/{id}/canvas", get(get_canvas))
         .route("/markets/{id}/tickets", get(get_market_tickets))
         .route("/tickets/{id}", get(get_ticket))
+        .route("/tickets/{id}/claim", post(claim_ticket))
         .route("/tickets/{id}/list", post(secondary_resale::list_ticket))
         .route(
             "/tickets/{id}/cancel-listing",
@@ -321,6 +339,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/profiles/{address}/deposits",
             post(deposits::verify_profile_deposit),
+        )
+        .route(
+            "/profiles/{address}/tickets",
+            get(profile_tickets::get_profile_tickets),
         )
         .route("/profiles/{address}", get(get_profile))
         .route("/ws/markets/{id}", get(ws_market))
@@ -504,16 +526,35 @@ async fn get_canvas(
     Ok(Json(value))
 }
 
+#[derive(Debug, Deserialize)]
+struct MarketTicketsQuery {
+    round_id: Option<u64>,
+}
+
 async fn get_market_tickets(
     State(state): State<AppState>,
     Path(id): Path<u64>,
+    Query(query): Query<MarketTicketsQuery>,
 ) -> Result<Json<Value>, ApiError> {
     ensure_phase_one_protocol_markets(&state).await?;
-    if state.store.get_market(id).await.is_none() {
-        return Err(ApiError::not_found(
-            "market_not_found",
-            "Market bulunamadi.",
-        ));
+    let market = state
+        .store
+        .get_market(id)
+        .await
+        .ok_or_else(|| ApiError::not_found("market_not_found", "Market bulunamadi."))?;
+    let price_header = match query.round_id {
+        Some(round_id) => {
+            state
+                .price_provider
+                .price_header_for_market_round(&market, round_id)
+                .await
+        }
+        None => state.price_provider.price_header_for_market(&market).await,
+    };
+    if let Some(round_id) = query.round_id {
+        if settle_market_round_if_ready(&state, &market, round_id, price_header.as_ref()).await? {
+            state.cache.flush().await;
+        }
     }
 
     let tickets: Vec<_> = state
@@ -521,7 +562,12 @@ async fn get_market_tickets(
         .get_tickets_for_market(id)
         .await
         .into_iter()
-        .map(TicketResponse::from)
+        .filter(|ticket| {
+            query
+                .round_id
+                .map_or(true, |round_id| ticket.round_id == round_id)
+        })
+        .map(|ticket| TicketResponse::from_row(ticket, price_header.as_ref(), Some(&market)))
         .collect();
     serde_json::to_value(tickets)
         .map(Json)
@@ -542,9 +588,127 @@ async fn get_ticket(
         .get_ticket(id)
         .await
         .ok_or_else(|| ApiError::not_found("ticket_not_found", "Ticket bulunamadi."))?;
-    let value = serde_json::to_value(TicketResponse::from(ticket)).map_err(ApiError::internal)?;
+    let market = state.store.get_market(ticket.market_id).await;
+    let price_header = match market.as_ref() {
+        Some(market) => {
+            state
+                .price_provider
+                .price_header_for_market_round(market, ticket.round_id)
+                .await
+        }
+        None => None,
+    };
+    let ticket = if let Some(market) = market.as_ref() {
+        if settle_market_round_if_ready(&state, market, ticket.round_id, price_header.as_ref())
+            .await?
+        {
+            state.cache.flush().await;
+            state
+                .store
+                .get_ticket(id)
+                .await
+                .ok_or_else(|| ApiError::not_found("ticket_not_found", "Ticket bulunamadi."))?
+        } else {
+            ticket
+        }
+    } else {
+        ticket
+    };
+    let value = serde_json::to_value(TicketResponse::from_row(
+        ticket,
+        price_header.as_ref(),
+        market.as_ref(),
+    ))
+    .map_err(ApiError::internal)?;
     state.cache.set_json(cache_key, value.clone(), 5).await;
     Ok(Json(value))
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaimTicketRequest {
+    claimer_wallet: String,
+}
+
+async fn claim_ticket(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+    Json(input): Json<ClaimTicketRequest>,
+) -> Result<Json<ClaimTicketResponse>, ApiError> {
+    let _session = require_privy_session(&state, &headers)?;
+    let claimer = normalize_solana_pubkey(&input.claimer_wallet)
+        .map_err(|_| ApiError::bad_request("invalid_wallet", "Wallet address gecersiz."))?;
+    let ticket = state
+        .store
+        .get_ticket(id)
+        .await
+        .ok_or_else(|| ApiError::not_found("ticket_not_found", "Ticket bulunamadi."))?;
+    let market = state
+        .store
+        .get_market(ticket.market_id)
+        .await
+        .ok_or_else(|| ApiError::not_found("market_not_found", "Market bulunamadi."))?;
+    let price_header = state
+        .price_provider
+        .price_header_for_market_round(&market, ticket.round_id)
+        .await;
+    if settle_market_round_if_ready(&state, &market, ticket.round_id, price_header.as_ref()).await?
+    {
+        state.cache.flush().await;
+    }
+    let ticket = state
+        .store
+        .get_ticket(id)
+        .await
+        .ok_or_else(|| ApiError::not_found("ticket_not_found", "Ticket bulunamadi."))?;
+
+    if ticket.current_owner != claimer {
+        return Err(ApiError::bad_request(
+            "wallet_mismatch",
+            "Wallet bu ticket'in current owner'i degil.",
+        ));
+    }
+
+    let status = public_ticket_status(ticket.status);
+    if !ticket.claimed && status != "won" && status != "refundable" {
+        return Err(ApiError::bad_request(
+            "ticket_not_claimable",
+            "Ticket claim icin hazir degil.",
+        ));
+    }
+    let amount = ticket.settlement_value_usdc.unwrap_or(0);
+    if !ticket.claimed && amount == 0 {
+        return Err(ApiError::bad_request(
+            "claim_amount_unavailable",
+            "Claim amount henuz hesaplanmadi.",
+        ));
+    }
+
+    let result = state
+        .store
+        .claim_ticket_to_cash(
+            id,
+            claimer,
+            amount,
+            &EventMeta {
+                cluster: "devnet".to_owned(),
+                program_id: state.chain_config.program_id.clone().unwrap_or_default(),
+                slot: 0,
+                block_hash: "api-claim".to_owned(),
+                signature: format!("api-claim-{id}"),
+                instruction_index: 0,
+            },
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    state.persist_cash_projection().await?;
+    state.cache.flush().await;
+
+    Ok(Json(ClaimTicketResponse::from_claim(
+        result,
+        price_header.as_ref(),
+        &market,
+    )))
 }
 
 async fn request_share_render(
@@ -812,6 +976,38 @@ async fn binance_price_header_for_market(
     Some(response)
 }
 
+async fn binance_price_header_for_market_round(
+    client: &BinanceClient,
+    market: &MarketRow,
+    round_id: u64,
+) -> Option<MarketPriceHeaderResponse> {
+    let stream = crypto_projection::phase_one_stream_for_market_id(market.market_id)?;
+    let (start_at, end_at) = round_window(round_id, stream.duration_seconds).ok()?;
+    let symbol = binance_symbol_for_asset(stream.asset).ok()?.to_owned();
+    let mut response = empty_price_header(&stream, symbol.clone(), round_id, start_at, end_at);
+    let snapshot = client
+        .fetch_round_snapshot(stream.asset, start_at, stream.duration_seconds)
+        .await;
+
+    if let Ok(snapshot) = snapshot {
+        response.open_price = Some(snapshot.start_price.to_string());
+        response.close_price = Some(snapshot.end_price.to_string());
+        response.price_display_state = if chrono::Utc::now().timestamp() >= end_at {
+            "closed"
+        } else {
+            "live"
+        };
+    }
+
+    if response.price_display_state == "live" {
+        if let Ok(BinanceTickerPrice { price, .. }) = client.fetch_ticker_price(&symbol).await {
+            response.current_price = Some(price.to_string());
+        }
+    }
+
+    Some(response)
+}
+
 fn empty_price_header(
     stream: &MarketStreamConfig,
     symbol: String,
@@ -861,7 +1057,9 @@ impl From<OutcomeRow> for OutcomeResponse {
 struct TicketResponse {
     ticket_id: String,
     market_id: String,
+    round_id: String,
     outcome_id: u8,
+    token_name: String,
     original_caller: String,
     current_owner: String,
     stake_amount: String,
@@ -879,16 +1077,57 @@ struct TicketResponse {
     mood: u8,
 }
 
-impl From<TicketRow> for TicketResponse {
-    fn from(row: TicketRow) -> Self {
+#[derive(Debug, Serialize)]
+struct ClaimTicketResponse {
+    status: &'static str,
+    ticket_id: String,
+    amount: String,
+    cash_balance: String,
+    ticket: TicketResponse,
+}
+
+impl ClaimTicketResponse {
+    fn from_claim(
+        result: TicketClaimResult,
+        price_header: Option<&MarketPriceHeaderResponse>,
+        market: &MarketRow,
+    ) -> Self {
+        Self {
+            status: if result.credited {
+                "claimed"
+            } else {
+                "already_claimed"
+            },
+            ticket_id: result.ticket.ticket_id.to_string(),
+            amount: result.amount.to_string(),
+            cash_balance: result.cash_balance.cash_balance.to_string(),
+            ticket: TicketResponse::from_row(result.ticket, price_header, Some(market)),
+        }
+    }
+}
+
+impl TicketResponse {
+    fn from_row(
+        row: TicketRow,
+        price_header: Option<&MarketPriceHeaderResponse>,
+        market: Option<&MarketRow>,
+    ) -> Self {
         let token_amount = ticket_token_amount(&row);
         let cost_basis_usdc = ticket_cost_basis_usdc(&row, token_amount);
         let avg_entry_price = avg_entry_price(cost_basis_usdc, token_amount);
         let settlement_value_usdc = row.settlement_value_usdc;
+        let status = public_ticket_status(row.status);
+        let realized_pnl_usdc = if status == "lost" {
+            Some(negative_amount_string(cost_basis_usdc))
+        } else {
+            settlement_value_usdc.map(|amount| signed_delta_string(amount, cost_basis_usdc))
+        };
         Self {
             ticket_id: row.ticket_id.to_string(),
             market_id: row.market_id.to_string(),
+            round_id: row.round_id.to_string(),
             outcome_id: row.outcome_id,
+            token_name: ticket_token_name(&row, price_header, market),
             original_caller: row.original_caller,
             current_owner: row.current_owner,
             stake_amount: row.stake_amount.to_string(),
@@ -898,14 +1137,72 @@ impl From<TicketRow> for TicketResponse {
             cost_basis_usdc: cost_basis_usdc.to_string(),
             avg_entry_price: avg_entry_price.to_string(),
             settlement_value_usdc: settlement_value_usdc.map(|amount| amount.to_string()),
-            realized_pnl_usdc: settlement_value_usdc
-                .map(|amount| signed_delta_string(amount, cost_basis_usdc)),
+            realized_pnl_usdc,
             listed_price: row.listed_price.map(|amount| amount.to_string()),
-            status: format!("{:?}", row.status).to_ascii_lowercase(),
+            status: status.to_owned(),
             claimed: row.claimed,
             confidence: row.confidence,
             mood: row.mood,
         }
+    }
+}
+
+impl From<TicketRow> for TicketResponse {
+    fn from(row: TicketRow) -> Self {
+        Self::from_row(row, None, None)
+    }
+}
+
+fn ticket_token_name(
+    row: &TicketRow,
+    price_header: Option<&MarketPriceHeaderResponse>,
+    market: Option<&MarketRow>,
+) -> String {
+    let side = ticket_side_slug(row.outcome_id);
+    if let Some(header) = price_header {
+        let asset = header.asset.trim();
+        let duration_minutes = header.duration_seconds / 60;
+        if !asset.is_empty() && duration_minutes > 0 && header.start_at > 0 {
+            return format!(
+                "{}-updown-{}m-{}-{}",
+                asset.to_ascii_lowercase(),
+                duration_minutes,
+                header.start_at,
+                side
+            );
+        }
+    }
+    if let Some(market) = market {
+        if let Some(stream) = crypto_projection::phase_one_stream_for_market_id(market.market_id) {
+            let live = market.status == MarketStatus::Open;
+            if let Some((_, start_at, _)) = crypto_projection::price_round_window(
+                market,
+                &stream,
+                chrono::Utc::now().timestamp(),
+                live,
+                None,
+            ) {
+                let duration_minutes = stream.duration_seconds / 60;
+                if duration_minutes > 0 && start_at > 0 {
+                    return format!(
+                        "{}-updown-{}m-{}-{}",
+                        stream.asset.to_string().to_ascii_lowercase(),
+                        duration_minutes,
+                        start_at,
+                        side
+                    );
+                }
+            }
+        }
+    }
+    format!("market-{}-{}", row.market_id, side)
+}
+
+fn ticket_side_slug(outcome_id: u8) -> &'static str {
+    if outcome_id == 1 {
+        "down"
+    } else {
+        "up"
     }
 }
 
@@ -942,6 +1239,14 @@ fn signed_delta_string(value: u128, cost: u128) -> String {
         (value - cost).to_string()
     } else {
         format!("-{}", cost - value)
+    }
+}
+
+fn negative_amount_string(value: u128) -> String {
+    if value == 0 {
+        "0".to_owned()
+    } else {
+        format!("-{value}")
     }
 }
 
@@ -1127,10 +1432,22 @@ fn public_mood(mood: u8) -> &'static str {
     }
 }
 
+fn public_ticket_status(status: TicketStatus) -> &'static str {
+    match status {
+        TicketStatus::Active => "active",
+        TicketStatus::Listed => "listed",
+        TicketStatus::Claimable => "won",
+        TicketStatus::Refundable => "refundable",
+        TicketStatus::Claimed => "claimed",
+        TicketStatus::Lost | TicketStatus::Cancelled => "lost",
+    }
+}
+
 fn public_canvas_ticket_status(ticket: Option<&TicketRow>, listed: bool) -> &'static str {
     match ticket.map(|ticket| ticket.status) {
         Some(TicketStatus::Listed) => "listed",
         Some(TicketStatus::Claimable) => "won",
+        Some(TicketStatus::Refundable) => "refundable",
         Some(TicketStatus::Claimed) => "claimed",
         Some(TicketStatus::Lost | TicketStatus::Cancelled) => "lost",
         Some(TicketStatus::Active) | None => {
@@ -1159,5 +1476,7 @@ fn short_address(address: &str) -> String {
     format!("{}...{}", &address[..6], &address[address.len() - 4..])
 }
 
+#[cfg(test)]
+mod settlement_tests;
 #[cfg(test)]
 mod tests;

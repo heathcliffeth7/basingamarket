@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     cost_basis_usdc NUMERIC(78, 0) NOT NULL DEFAULT 0,
     settlement_value_usdc NUMERIC(78, 0),
     listed_price NUMERIC(78, 0),
-    status TEXT NOT NULL CHECK (status IN ('active', 'listed', 'claimable', 'claimed', 'lost', 'cancelled')),
+    status TEXT NOT NULL CHECK (status IN ('active', 'listed', 'claimable', 'refundable', 'claimed', 'lost', 'cancelled')),
     claimed BOOLEAN NOT NULL DEFAULT FALSE,
     confidence SMALLINT NOT NULL DEFAULT 0,
     mood SMALLINT NOT NULL DEFAULT 0,

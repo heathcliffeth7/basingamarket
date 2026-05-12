@@ -119,6 +119,7 @@ mod tests {
                 ProtocolEvent::TicketMinted {
                     ticket_id: 1,
                     market_id: 1,
+                    round_id: 1,
                     owner: TEST_OWNER.to_owned(),
                     outcome_id: 0,
                     stake_amount: 1_000_000,

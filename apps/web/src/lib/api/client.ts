@@ -13,6 +13,7 @@ import {
   CashBidSchema,
   CashResaleSchema,
   CancelListingResponseSchema,
+  ClaimTicketSchema,
   ListingResponseSchema,
   MarketBuySchema,
   MarketCurveSchema,
@@ -44,6 +45,7 @@ import {
   type CashBid,
   type CashResale,
   type CancelListingResponse,
+  type ClaimTicket,
   type ListingResponse,
   type MarketBuy,
   type Market,
@@ -257,10 +259,13 @@ export const api = {
     );
   },
 
-  getMarketTickets(marketId: string): Promise<Ticket[]> {
+  getMarketTickets(marketId: string, roundId?: string | number | null): Promise<Ticket[]> {
+    const search = roundId === null || roundId === undefined || roundId === ''
+      ? ''
+      : `?${new URLSearchParams({ round_id: String(roundId) }).toString()}`;
     return withMockFallback(
-      () => requestJson(`/markets/${marketId}/tickets`, TicketsSchema),
-      () => mockTickets.filter((ticket) => ticket.market_id === marketId)
+      () => requestJson(`/markets/${marketId}/tickets${search}`, TicketsSchema),
+      () => mockTickets.filter((ticket) => ticket.market_id === marketId && (!roundId || ticket.round_id === String(roundId)))
     );
   },
 
@@ -269,6 +274,22 @@ export const api = {
       () => requestJson(`/tickets/${ticketId}`, TicketSchema),
       () => mockTickets.find((ticket) => ticket.ticket_id === ticketId) ?? mockTickets[0]
     );
+  },
+
+  claimTicket({
+    ticketId,
+    claimerWallet,
+    accessToken
+  }: {
+    ticketId: string;
+    claimerWallet: string;
+    accessToken?: string | null;
+  }): Promise<ClaimTicket> {
+    return requestJson(`/tickets/${ticketId}/claim`, ClaimTicketSchema, {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+      body: JSON.stringify({ claimer_wallet: claimerWallet })
+    });
   },
 
   listTicket({
@@ -584,6 +605,13 @@ export const api = {
     return withMockFallback(
       () => requestJson(`/profiles/${address}`, ProfileSchema),
       () => mockProfile(address)
+    );
+  },
+
+  getProfileTickets(address: string): Promise<Ticket[]> {
+    return withMockFallback(
+      () => requestJson(`/profiles/${address}/tickets`, TicketsSchema),
+      () => mockTickets.filter((ticket) => ticket.current_owner === address || ticket.original_caller === address)
     );
   },
 

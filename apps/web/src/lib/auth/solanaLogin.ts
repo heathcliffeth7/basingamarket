@@ -1,4 +1,5 @@
 import type { ConnectWalletModalOptions, LoginModalOptions, WalletListEntry } from '@privy-io/react-auth';
+import { isSolanaPubkey } from '@/lib/utils/solana';
 
 export type SolanaAuthErrorStep = 'login' | 'link';
 
@@ -10,7 +11,7 @@ export type SolanaAuthError = {
 };
 
 export type DirectSolanaLoginStatus = 'idle' | 'opening' | 'error';
-export type SolanaWalletAuthAction = 'login' | 'linkWallet' | 'none';
+export type SolanaWalletAuthAction = 'login' | 'linkWallet';
 
 export const solanaWalletConnectorOptions = {
   shouldAutoConnect: false
@@ -38,20 +39,30 @@ export const solanaConnectWalletOptions: ConnectWalletModalOptions = {
 };
 
 export function chooseSolanaWalletAuthAction({
-  authenticated,
-  solanaWalletCount
+  authenticated
 }: {
   authenticated: boolean;
-  solanaWalletCount: number;
+  solanaWalletCount?: number;
 }): SolanaWalletAuthAction {
   if (!authenticated) return 'login';
-  return solanaWalletCount > 0 ? 'none' : 'linkWallet';
+  return 'linkWallet';
+}
+
+export function solanaWalletAddressFromPrivyAccount(account: unknown) {
+  if (typeof account !== 'object' || account === null) return null;
+  const record = account as Record<string, unknown>;
+  if (typeof record.type === 'string' && record.type !== 'wallet') return null;
+  if (typeof record.chainType === 'string' && record.chainType !== 'solana') return null;
+  const address = typeof record.address === 'string' ? record.address : null;
+  if (!address || !isSolanaPubkey(address)) return null;
+  return address;
 }
 
 export type StickySolanaWalletInput<TWallet extends { address: string }> = {
   authenticated: boolean;
   wallets: TWallet[];
   walletsReady: boolean;
+  preferredAddress?: string | null;
   previousAddress: string | null;
 };
 
@@ -67,6 +78,7 @@ export function resolveStickySolanaWallet<TWallet extends { address: string }>({
   authenticated,
   wallets,
   walletsReady,
+  preferredAddress,
   previousAddress
 }: StickySolanaWalletInput<TWallet>): StickySolanaWalletState<TWallet> {
   if (!authenticated) {
@@ -76,6 +88,17 @@ export function resolveStickySolanaWallet<TWallet extends { address: string }>({
       hasSolanaWallet: false,
       resolving: false,
       nextStickyAddress: null
+    };
+  }
+
+  if (preferredAddress && isSolanaPubkey(preferredAddress)) {
+    const preferredWallet = wallets.find((wallet) => wallet.address === preferredAddress) ?? null;
+    return {
+      wallet: preferredWallet,
+      address: preferredAddress,
+      hasSolanaWallet: true,
+      resolving: !preferredWallet,
+      nextStickyAddress: preferredAddress
     };
   }
 
@@ -119,7 +142,7 @@ export function getPrivyAppIdFingerprint(appId: string) {
   return `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
 }
 
-export function buildSolanaAuthError(step: SolanaAuthErrorStep, error: unknown): SolanaAuthError {
+export function buildSolanaAuthError(step: SolanaAuthErrorStep, error: unknown): SolanaAuthError | null {
   const detail = readErrorDetail(error);
 
   if (isPrivySolanaLoginDisabledError(detail)) {
@@ -141,12 +164,7 @@ export function buildSolanaAuthError(step: SolanaAuthErrorStep, error: unknown):
   }
 
   if (isUserRejectedError(detail) || detail === 'exited_auth_flow') {
-    return {
-      step,
-      title: 'Privy cüzdan modalı kapatıldı',
-      message: 'Cüzdan seçimi tamamlanmadı. Tekrar denediğinde Solana cüzdanını seçip bağlantı isteğini onayla.',
-      detail
-    };
+    return null;
   }
 
   return {

@@ -1064,6 +1064,7 @@ mod tests {
         TicketRow {
             ticket_id,
             market_id: 1,
+            round_id: 1,
             outcome_id,
             original_caller: owner.to_owned(),
             current_owner: owner.to_owned(),

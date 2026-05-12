@@ -102,6 +102,7 @@ pub struct OutcomeRow {
 pub struct TicketRow {
     pub ticket_id: u64,
     pub market_id: u64,
+    pub round_id: u64,
     pub outcome_id: u8,
     pub original_caller: String,
     pub current_owner: String,
@@ -170,6 +171,14 @@ pub struct PayoutClaimRow {
     pub slot: u64,
     pub signature: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketClaimResult {
+    pub ticket: TicketRow,
+    pub cash_balance: CashBalanceRow,
+    pub amount: u128,
+    pub credited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

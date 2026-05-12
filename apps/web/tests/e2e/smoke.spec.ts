@@ -90,12 +90,10 @@ test('market detail makes the asset price chart the primary surface', async ({ p
   await expect(orderBook).toBeVisible();
   await expect(orderBook).toHaveAttribute('data-density', 'compact');
   await expect(orderBook.getByText('Order book')).toBeVisible();
-  await expect(orderBook.getByText('Bonding curve depth')).toBeVisible();
-  for (const column of ['Side', 'Price', 'Amount', 'Total USD']) {
-    await expect(orderBook.getByText(column)).toBeVisible();
+  await expect(orderBook.getByText('Live bids and asks')).toBeVisible();
+  for (const column of ['Side', 'Bid', 'Ask', 'Size', 'Total BUSDC']) {
+    await expect(orderBook.getByRole('columnheader', { name: column })).toBeVisible();
   }
-  await expect(orderBook.getByText('UP token').first()).toBeVisible();
-  await expect(orderBook.getByRole('button')).toHaveCount(0);
   const box = await chart.boundingBox();
   const orderBookBox = await orderBook.boundingBox();
   expect(box).not.toBeNull();
@@ -137,16 +135,17 @@ test('live market action panel hides the live-market CTA', async ({ page }) => {
   const visibleActionPanel = page.locator('aside[aria-label="Market action panel"]:visible');
   const chart = page.getByLabel('Asset price round chart');
 
-  if ((viewport?.width ?? 0) < 1280) {
-    await page.getByRole('button', { name: /Trade intents/ }).click();
-  }
-
   await expect(chart.locator('[data-testid="asset-price-canvas"]')).toBeVisible();
   await expect(chart.locator('[data-testid="asset-price-line"]')).toHaveCount(0);
   await expect(chart.locator('number-flow-react').first()).toBeVisible();
   await expect(page.getByText('$35,580.00')).toHaveCount(0);
   await expect(page.getByText('$35,567.28')).toHaveCount(0);
-  await expect(visibleActionPanel).toBeVisible();
+  if ((viewport?.width ?? 0) >= 1280) {
+    await expect(visibleActionPanel).toBeVisible();
+  } else {
+    await page.getByRole('button', { name: /Trade intents/ }).click();
+    await expect(visibleActionPanel).toBeVisible();
+  }
   const marketRead = visibleActionPanel.getByLabel('Market read');
   await expect(marketRead.getByText(/Market leans|Crowd leans UP/)).toBeVisible();
   await expect(marketRead.getByText('Go to live market')).toHaveCount(0);

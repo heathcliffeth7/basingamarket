@@ -4,6 +4,7 @@ mod cash_snapshot;
 mod engine;
 mod markets;
 mod memory;
+mod memory_settlement;
 mod pg;
 mod rows;
 mod withdrawals;

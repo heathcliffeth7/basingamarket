@@ -1,8 +1,64 @@
+import { act, type ReactNode } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
-import { AuthenticatedHeaderControls, authNoticeCopy, headerCashDisplayValue, marketCategories } from './AppShell';
+import { describe, expect, it, vi } from 'vitest';
+import { AuthenticatedHeaderControls, authNoticeCopy, headerCashDisplayValue, marketCategories, shortWalletAddress } from './AppShell';
 
 const SOLANA_DEVNET_PUBKEY = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+
+vi.mock('@/lib/components/deposit/DepositButton', async () => {
+  const { useEffect, useState } = await import('react');
+
+  return {
+    default: function MockDepositButton({
+      openRequest,
+      renderTrigger
+    }: {
+      openRequest?: number;
+      renderTrigger?: (open: () => void, label: string) => ReactNode;
+    }) {
+      const [open, setOpen] = useState(false);
+
+      useEffect(() => {
+        if (openRequest) setOpen(true);
+      }, [openRequest]);
+
+      return (
+        <>
+          {renderTrigger ? renderTrigger(() => setOpen(true), 'Deposit') : null}
+          {open ? <div role="dialog" aria-label="Deposit">Deposit modal</div> : null}
+        </>
+      );
+    }
+  };
+});
+
+vi.mock('@/lib/components/withdraw/WithdrawButton', async () => {
+  const { useEffect, useState } = await import('react');
+
+  return {
+    default: function MockWithdrawButton({
+      openRequest,
+      renderTrigger
+    }: {
+      openRequest?: number;
+      renderTrigger?: (open: () => void, label: string) => ReactNode;
+    }) {
+      const [open, setOpen] = useState(false);
+
+      useEffect(() => {
+        if (openRequest) setOpen(true);
+      }, [openRequest]);
+
+      return (
+        <>
+          {renderTrigger ? renderTrigger(() => setOpen(true), 'Withdraw') : null}
+          {open ? <div role="dialog" aria-label="Withdraw">Withdraw modal</div> : null}
+        </>
+      );
+    }
+  };
+});
 
 describe('AppShell header cash and deposit controls', () => {
   it('points the Crypto nav item at the crypto market category', () => {
@@ -74,16 +130,14 @@ describe('AppShell header cash and deposit controls', () => {
     ).toBe('0 BUSDC');
   });
 
-  it('renders compact BUSDC balance, mint/deposit/withdraw controls, and profile entry in authenticated header controls', () => {
+  it('renders compact BUSDC balance, mint control, and the wallet menu in authenticated header controls', () => {
     const html = renderToStaticMarkup(
       <AuthenticatedHeaderControls
         compact
         cashValue="0 BUSDC"
         walletAddress={SOLANA_DEVNET_PUBKEY}
-        profileHref={`/profiles/${SOLANA_DEVNET_PUBKEY}`}
+        onSwitchWallet={() => undefined}
         mintNode={<button type="button" aria-label="Mint BUSDC">Mint BUSDC</button>}
-        depositNode={<button type="button" aria-label="Deposit">Deposit</button>}
-        withdrawNode={<button type="button" aria-label="Withdraw">Withdraw</button>}
       />
     );
 
@@ -91,9 +145,106 @@ describe('AppShell header cash and deposit controls', () => {
     expect(html).toContain('0 BUSDC');
     expect(html).toContain('aria-label="BUSDC balance"');
     expect(html).toContain('aria-label="Mint BUSDC"');
-    expect(html).toContain('aria-label="Deposit"');
-    expect(html).toContain('aria-label="Withdraw"');
     expect(html).toContain('data-testid="cash-wallet-icon"');
-    expect(html).toContain('aria-label="Profile"');
+    expect(html).toContain('aria-label="Active wallet"');
+    expect(html).not.toContain('aria-label="Switch wallet"');
+    expect(html).not.toContain('aria-label="Profile"');
+  });
+
+  it('renders the full active wallet dropdown on the right for desktop headers', () => {
+    const html = renderToStaticMarkup(
+      <AuthenticatedHeaderControls
+        cashValue="0 BUSDC"
+        walletAddress={SOLANA_DEVNET_PUBKEY}
+        onSwitchWallet={() => undefined}
+        onLogout={() => undefined}
+        mintNode={<button type="button" aria-label="Mint BUSDC">Mint BUSDC</button>}
+      />
+    );
+
+    expect(html).toContain('aria-label="Active wallet"');
+    expect(html).toContain(shortWalletAddress(SOLANA_DEVNET_PUBKEY));
+    expect(html).not.toContain('aria-label="Switch wallet"');
+  });
+
+  it('opens the requested wallet action modal from the wallet menu', async () => {
+    const depositRender = await renderInteractiveHeaderControls();
+
+    await openWalletMenuAction(depositRender.container, 'Deposit');
+
+    expect(depositRender.container.querySelector('[role="menu"]')).toBeNull();
+    expect(depositRender.container.querySelector('[role="dialog"][aria-label="Deposit"]')).not.toBeNull();
+    expect(depositRender.container.querySelector('[role="dialog"][aria-label="Withdraw"]')).toBeNull();
+    await depositRender.cleanup();
+
+    const withdrawRender = await renderInteractiveHeaderControls();
+
+    await openWalletMenuAction(withdrawRender.container, 'Withdraw');
+
+    expect(withdrawRender.container.querySelector('[role="menu"]')).toBeNull();
+    expect(withdrawRender.container.querySelector('[role="dialog"][aria-label="Withdraw"]')).not.toBeNull();
+    expect(withdrawRender.container.querySelector('[role="dialog"][aria-label="Deposit"]')).toBeNull();
+    await withdrawRender.cleanup();
+  });
+
+  it('uses a single login control when no wallet address is available', () => {
+    const html = renderToStaticMarkup(
+      <AuthenticatedHeaderControls
+        cashValue="Wallet bağlanıyor"
+        walletAddress={null}
+        onLogin={() => undefined}
+        mintNode={<button type="button" aria-label="Mint BUSDC">Mint BUSDC</button>}
+      />
+    );
+
+    expect(html).toContain('aria-label="Login"');
+    expect(html).toContain('Login');
+    expect(html).not.toContain('Sign up');
+    expect(html).not.toContain('aria-label="Switch wallet"');
   });
 });
+
+async function renderInteractiveHeaderControls() {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () => {
+    root.render(
+      <AuthenticatedHeaderControls
+        cashValue="0 BUSDC"
+        walletAddress={SOLANA_DEVNET_PUBKEY}
+        onSwitchWallet={() => undefined}
+        onLogout={() => undefined}
+        mintNode={<button type="button" aria-label="Mint BUSDC">Mint BUSDC</button>}
+      />
+    );
+  });
+
+  return {
+    container,
+    cleanup: async () => {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    }
+  };
+}
+
+async function openWalletMenuAction(container: HTMLElement, label: 'Deposit' | 'Withdraw') {
+  const walletButton = container.querySelector('button[aria-label="Active wallet"]');
+  expect(walletButton).not.toBeNull();
+
+  await act(async () => {
+    walletButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+
+  const actionButton = Array.from(container.querySelectorAll('button'))
+    .find((button) => button.textContent?.trim() === label);
+  expect(actionButton).not.toBeUndefined();
+
+  await act(async () => {
+    actionButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}

@@ -46,6 +46,7 @@ function TicketNode({
     active: { label: 'ACTIVE', short: 'A', bg: '#5366f2', text: '#ffffff' },
     listed: { label: 'LISTED', short: '$', bg: '#f59e0b', text: '#050712' },
     won: { label: 'WON', short: 'W', bg: '#10b981', text: '#050712' },
+    refundable: { label: 'REFUND', short: 'R', bg: '#00c4ff', text: '#050712' },
     lost: { label: 'LOST', short: 'X', bg: '#ef4444', text: '#ffffff' },
     claimed: { label: 'CLAIMED', short: 'C', bg: '#94a3b8', text: '#050712' }
   };

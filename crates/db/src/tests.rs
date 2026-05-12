@@ -17,6 +17,7 @@ fn mint(ticket_id: u64) -> ProtocolEvent {
     ProtocolEvent::TicketMinted {
         ticket_id,
         market_id: 1,
+        round_id: 1,
         owner: TEST_OWNER.to_owned(),
         outcome_id: 0,
         stake_amount: 1_000_000,

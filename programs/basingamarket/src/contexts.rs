@@ -58,28 +58,13 @@ pub struct OpenRound<'info> {
         bump
     )]
     pub round: Account<'info, Round>,
-    #[account(
-        init,
-        payer = authority,
-        space = 8 + OpeningAggregate::INIT_SPACE,
-        seeds = [b"opening_aggregate", round.key().as_ref(), b"up"],
-        bump
-    )]
-    pub up_aggregate: Account<'info, OpeningAggregate>,
-    #[account(
-        init,
-        payer = authority,
-        space = 8 + OpeningAggregate::INIT_SPACE,
-        seeds = [b"opening_aggregate", round.key().as_ref(), b"down"],
-        bump
-    )]
-    pub down_aggregate: Account<'info, OpeningAggregate>,
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
+#[instruction(args: SubmitOpeningOrderArgs)]
 pub struct SubmitOpeningOrder<'info> {
     #[account(seeds = [b"global"], bump = global_config.bump)]
     pub global_config: Account<'info, GlobalConfig>,
@@ -87,7 +72,13 @@ pub struct SubmitOpeningOrder<'info> {
     pub market_config: Account<'info, MarketConfig>,
     #[account(seeds = [b"round", round.market.as_ref(), round.round_id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
-    #[account(mut)]
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + OpeningAggregate::INIT_SPACE,
+        seeds = [b"opening_aggregate", round.key().as_ref(), &[args.side as u8]],
+        bump
+    )]
     pub aggregate: Account<'info, OpeningAggregate>,
     #[account(init, payer = user, space = 8 + OpeningOrder::INIT_SPACE)]
     pub opening_order: Account<'info, OpeningOrder>,

@@ -1106,7 +1106,11 @@ fn ensure_tradeable_ticket(ticket: &TicketRow) -> Result<(), ApiError> {
     if ticket.claimed
         || matches!(
             ticket.status,
-            TicketStatus::Claimed | TicketStatus::Lost | TicketStatus::Cancelled
+            TicketStatus::Claimable
+                | TicketStatus::Refundable
+                | TicketStatus::Claimed
+                | TicketStatus::Lost
+                | TicketStatus::Cancelled
         )
     {
         return Err(ApiError::bad_request(

@@ -24,7 +24,8 @@
     "check": "API_INTERNAL_BASE_URL=http://127.0.0.1:8080 NEXT_PUBLIC_USE_MOCK_FALLBACK=true tsc --noEmit",
     "test:unit": "API_INTERNAL_BASE_URL=http://127.0.0.1:8080 NEXT_PUBLIC_USE_MOCK_FALLBACK=true vitest run",
     "test:e2e": "playwright test",
-    "test": "npm run test:unit"
+    "test": "npm run test:unit",
+    "postinstall": "node scripts/patch-privy-key-warning.mjs"
   },
   "dependencies": {
     "@number-flow/react": "^0.6.0",

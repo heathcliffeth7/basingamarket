@@ -97,9 +97,9 @@ export default function MarketActionPanel({
     && viewingLive
     && market?.price_header?.price_display_state === 'live';
   const ticketsQuery = useQuery({
-    queryKey: ['market-tickets', marketId],
-    queryFn: () => api.getMarketTickets(marketId ?? ''),
-    enabled: Boolean(marketId && walletAddress && !outcome.closed)
+    queryKey: ['market-tickets', marketId, roundId],
+    queryFn: () => api.getMarketTickets(marketId ?? '', roundId),
+    enabled: Boolean(marketId && roundId && walletAddress)
   });
   const bidsQuery = useQuery({
     queryKey: ['round-bids', roundId, marketId],
@@ -115,7 +115,18 @@ export default function MarketActionPanel({
   });
   const ownedLots = useMemo(() => {
     if (!walletAddress) return [];
-    return (ticketsQuery.data ?? []).filter((ticket) => ticket.current_owner === walletAddress && !ticket.claimed);
+    return (ticketsQuery.data ?? []).filter((ticket) => (
+      ticket.current_owner === walletAddress
+      && !ticket.claimed
+      && (ticket.status === 'active' || ticket.status === 'listed')
+    ));
+  }, [ticketsQuery.data, walletAddress]);
+  const claimableTickets = useMemo(() => {
+    if (!walletAddress) return [];
+    return (ticketsQuery.data ?? []).filter((ticket) => (
+      ticket.current_owner === walletAddress
+      && canClaimTicket(ticket)
+    ));
   }, [ticketsQuery.data, walletAddress]);
   const bestBidBySide = useMemo(() => {
     const best: Partial<Record<TradeSide, CashBid>> = {};
@@ -311,6 +322,25 @@ export default function MarketActionPanel({
     },
     onError: (error) => setStatusMessage(tradeErrorMessage(error))
   });
+  const claimTicketMutation = useMutation({
+    mutationFn: async (ticket: Ticket) => {
+      if (!walletAddress) throw new Error('Solana wallet unavailable.');
+      const accessToken = await getAccessToken();
+      if (!accessToken) throw new Error('Login session required.');
+      return api.claimTicket({
+        ticketId: ticket.ticket_id,
+        claimerWallet: walletAddress,
+        accessToken
+      });
+    },
+    onSuccess: (result) => {
+      setLastSignature(null);
+      setStatusMessage(`Claimed ${formatUsdPrice(result.amount)} from #${result.ticket_id}`);
+      syncClaimedTicketCache(result.ticket);
+      invalidateTradeQueries(result.ticket_id);
+    },
+    onError: (error) => setStatusMessage(tradeErrorMessage(error))
+  });
 
   async function handleBuyClick() {
     setLastSignature(null);
@@ -340,8 +370,12 @@ export default function MarketActionPanel({
     buySelectedAskMutation.mutate();
   }
 
-  function invalidateTradeQueries() {
+  function invalidateTradeQueries(ticketId?: string) {
+    if (ticketId) {
+      void queryClient.invalidateQueries({ queryKey: ['ticket', ticketId] });
+    }
     if (marketId) {
+      void queryClient.invalidateQueries({ queryKey: ['market-tickets', marketId, roundId] });
       void queryClient.invalidateQueries({ queryKey: ['market-tickets', marketId] });
       void queryClient.invalidateQueries({ queryKey: ['market-curve', marketId] });
       void queryClient.invalidateQueries({ queryKey: ['market', marketId] });
@@ -352,6 +386,16 @@ export default function MarketActionPanel({
     }
     if (walletAddress) {
       void queryClient.invalidateQueries({ queryKey: cashBalanceQueryKey(walletAddress) });
+      void queryClient.invalidateQueries({ queryKey: ['profile-positions', walletAddress] });
+    }
+  }
+
+  function syncClaimedTicketCache(ticket: Ticket) {
+    queryClient.setQueryData<Ticket>(['ticket', ticket.ticket_id], ticket);
+    queryClient.setQueryData<Ticket[]>(['market-tickets', ticket.market_id, ticket.round_id], (current) => replaceCachedTicket(current, ticket));
+    queryClient.setQueryData<Ticket[]>(['market-tickets', ticket.market_id], (current) => replaceCachedTicket(current, ticket));
+    if (walletAddress) {
+      queryClient.setQueryData<Ticket[]>(['profile-positions', walletAddress], (current) => replaceCachedTicket(current, ticket));
     }
   }
 
@@ -401,7 +445,86 @@ export default function MarketActionPanel({
       )}
 
       {outcome.closed ? (
-        <OutcomeCard outcome={outcome} />
+        <>
+          <OutcomeCard outcome={outcome} />
+          <section className="rounded-2xl border border-terminal-line bg-terminal-panel p-4" aria-label="Round claims">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-terminal-text">Claims</p>
+                <p className="mt-1 text-xs font-semibold text-terminal-muted">
+                  Settlement is checked for this round when your wallet is connected.
+                </p>
+              </div>
+              <Badge className="shrink-0" tone={claimableTickets.length > 0 ? 'positive' : ticketsQuery.isLoading ? 'warning' : 'neutral'}>
+                {claimableTickets.length > 0 ? `${claimableTickets.length} ready` : ticketsQuery.isLoading ? 'Checking' : 'Settled'}
+              </Badge>
+            </div>
+
+            {!walletAddress ? (
+              <div className="mt-4 rounded-xl border border-terminal-line bg-terminal-bg p-3">
+                <p className="text-xs font-semibold text-terminal-muted">Connect wallet to check claims.</p>
+                <Button
+                  className="mt-3 h-9 w-full text-xs"
+                  disabled={walletConnectPending}
+                  onClick={() => {
+                    if (walletConnectPending) {
+                      setStatusMessage('Solana wallet syncing. Try again in a moment.');
+                      return;
+                    }
+                    void loginSolana();
+                  }}
+                  variant="secondary"
+                >
+                  <Wallet size={15} /> {walletConnectPending ? 'Wallet syncing' : 'Connect Solana wallet'}
+                </Button>
+              </div>
+            ) : ticketsQuery.isLoading ? (
+              <p className="mt-4 text-xs font-semibold text-terminal-muted">Checking claimable positions...</p>
+            ) : claimableTickets.length === 0 ? (
+              <p className="mt-4 text-xs font-semibold text-terminal-muted">No unclaimed payout or refund found for this wallet.</p>
+            ) : (
+              <div className="mt-4 space-y-2">
+                {claimableTickets.map((ticket) => {
+                  const claimType = ticket.status === 'refundable' ? 'Refund' : 'Payout';
+                  const pendingThisTicket = claimTicketMutation.isPending
+                    && claimTicketMutation.variables?.ticket_id === ticket.ticket_id;
+                  return (
+                    <div key={ticket.ticket_id} className="rounded-xl border border-terminal-line bg-terminal-bg p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <a
+                            className="inline-flex max-w-full items-center gap-1 truncate text-xs font-black text-terminal-text underline-offset-4 hover:underline"
+                            href={`/tickets/${ticket.ticket_id}`}
+                          >
+                            <span className="truncate">#{ticket.ticket_id}</span>
+                            <ExternalLink size={12} />
+                          </a>
+                          <p className="mt-1 text-xs font-semibold text-terminal-muted">
+                            {claimType} {formatUsdPrice(ticket.settlement_value_usdc ?? '0')}
+                          </p>
+                        </div>
+                        <Badge tone={ticket.status === 'refundable' ? 'warning' : 'positive'}>
+                          {ticket.status === 'refundable' ? 'Refundable' : 'Won'}
+                        </Badge>
+                      </div>
+                      <Button
+                        className="mt-3 h-9 w-full text-xs"
+                        disabled={pendingThisTicket}
+                        onClick={() => claimTicketMutation.mutate(ticket)}
+                        variant="default"
+                      >
+                        {pendingThisTicket ? <Loader2 className="animate-spin" size={15} /> : <Wallet size={15} />}
+                        Claim
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {statusMessage ? <p className="mt-3 text-xs font-semibold text-terminal-muted">{statusMessage}</p> : null}
+          </section>
+        </>
       ) : (
         <section className="relative rounded-2xl border border-terminal-line bg-terminal-panel">
           <div className="flex h-14 items-center justify-between gap-3 border-b border-terminal-line px-4">
@@ -659,7 +782,16 @@ export default function MarketActionPanel({
                         <div key={ticket.ticket_id} className="rounded-lg border border-terminal-line bg-terminal-panel-strong p-2">
                           <div className="flex items-center justify-between gap-2">
                             <div>
-                              <p className="text-xs font-black text-terminal-text">#{ticket.ticket_id} {side}</p>
+                              <p className="flex items-center gap-1 text-[11px] font-black text-terminal-text">
+                                {ticket.token_name ? (
+                                  <>
+                                    <span className="truncate">{ticket.token_name.replace(/-(up|down)$/i, '')}</span>
+                                    <span className="shrink-0 whitespace-nowrap">{side}</span>
+                                  </>
+                                ) : (
+                                  <span>#{ticket.ticket_id} {side}</span>
+                                )}
+                              </p>
                               <p className="text-[11px] font-semibold text-terminal-muted">{formatTokenAmount(ticket.stake_amount)} token</p>
                             </div>
                             <div className="text-right">
@@ -765,6 +897,15 @@ function tradeSideButtonClass(active: boolean, side: TradeSide) {
 
 function sideFromTicket(ticket: Ticket): TradeSide {
   return ticket.outcome_id === 1 ? 'DOWN' : 'UP';
+}
+
+function canClaimTicket(ticket: Ticket) {
+  return !ticket.claimed && (ticket.status === 'won' || ticket.status === 'refundable');
+}
+
+function replaceCachedTicket(current: Ticket[] | undefined, ticket: Ticket) {
+  if (!current) return current;
+  return current.map((cachedTicket) => cachedTicket.ticket_id === ticket.ticket_id ? ticket : cachedTicket);
 }
 
 type ClosedRoundOutcome = {
