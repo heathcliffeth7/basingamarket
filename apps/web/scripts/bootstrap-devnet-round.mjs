@@ -535,11 +535,15 @@ async function sendInstructions({ instructions, payer, rpc, rpcSubscriptions }) 
   } catch (error) {
     console.error('Transaction failed:', error);
     if (error && typeof error === 'object' && 'context' in error) {
-      console.error('Error context:', JSON.stringify((error).context, null, 2));
+      console.error('Error context:', stringifyWithBigInts((error).context));
     }
     throw error;
   }
   return getSignatureFromTransaction(signedTransaction);
+}
+
+function stringifyWithBigInts(value) {
+  return JSON.stringify(value, (_, item) => (typeof item === 'bigint' ? item.toString() : item), 2);
 }
 
 async function accountExists(rpc, pubkey) {

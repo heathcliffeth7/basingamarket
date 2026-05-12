@@ -81,6 +81,19 @@ describe('AssetPriceChartPanel', () => {
       unobserve() {}
       disconnect() {}
     } as typeof ResizeObserver;
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    });
   });
 
   afterEach(() => {
@@ -107,9 +120,10 @@ describe('AssetPriceChartPanel', () => {
     expect(html).toContain('Price To Beat');
     expect(html).toContain('Current Price');
     expect(html).toContain('data-testid="animated-price-readout"');
+    expect(html).toContain('data-price-lead="up"');
     expect(html).toContain('data-price-direction="up"');
     expect(html).toContain('number-flow-react');
-    expect(html).toContain('data-testid="asset-price-canvas"');
+    expect(html).toContain('data-testid="asset-price-chart"');
     expect(html).toContain('data-testid="market-switcher-trigger"');
     expect(html).toContain('aria-label="Round countdown"');
     expect(html).toContain('BTC · 5 Min');
@@ -117,9 +131,69 @@ describe('AssetPriceChartPanel', () => {
     expect(html).not.toContain('lucide-code');
     expect(html).not.toContain('lucide-link');
     expect(html).not.toContain('lucide-bookmark');
-    expect(html).not.toContain('data-testid="asset-price-line"');
     expect(html).not.toContain('UP / DOWN token price');
     expect(html).not.toContain('Go to live market');
+  });
+
+  it('keeps the current price tone yellow inside the neutral price band', () => {
+    const neutralMarket = {
+      ...marketWithRound('live'),
+      price_header: {
+        ...marketWithRound('live').price_header!,
+        current_price: '80799280000'
+      }
+    };
+    const neutralSeries = {
+      ...series('live'),
+      current_price: '80799280000',
+      points: [
+        { ts: liveStartAt, price: '80797280000' },
+        { ts: liveStartAt + 120, price: '80799280000' }
+      ]
+    };
+    const html = renderToStaticMarkup(
+      <AssetPriceChartPanel
+        market={neutralMarket}
+        series={neutralSeries}
+        selectedStartAt={liveStartAt}
+        liveHref="/markets/btc-updown-5m-1778413500"
+        viewingLive
+      />
+    );
+
+    expect(html).toContain('data-price-lead="neutral"');
+    expect(html).toContain('data-tone="neutral"');
+    expect(html).toContain('text-market-warning');
+    expect(html).toContain('bg-market-warning');
+  });
+
+  it('colors historical chart and go-live dot red when DOWN leads', () => {
+    const selectedHistoricalStartAt = liveStartAt - 300;
+    const downSeries: MarketPriceSeries = {
+      ...series('closed'),
+      start_at: selectedHistoricalStartAt,
+      end_at: selectedHistoricalStartAt + 300,
+      close_price: '80795270000',
+      points: [
+        { ts: selectedHistoricalStartAt, price: '80797280000' },
+        { ts: selectedHistoricalStartAt + 120, price: '80796270000' },
+        { ts: selectedHistoricalStartAt + 300, price: '80795270000' }
+      ]
+    };
+    const html = renderToStaticMarkup(
+      <AssetPriceChartPanel
+        market={marketWithRound('closed')}
+        series={downSeries}
+        selectedStartAt={selectedHistoricalStartAt}
+        liveHref="/markets/btc-updown-5m-1778413500"
+        viewingLive={false}
+      />
+    );
+
+    expect(html).toContain('data-price-lead="down"');
+    expect(html).toContain('data-tone="down"');
+    expect(html).toContain('data-testid="asset-price-chart"');
+    expect(html).toContain('bg-market-negative');
   });
 
   it('hydrates a live countdown without a recoverable mismatch when the client clock moves ahead', async () => {
@@ -168,9 +242,9 @@ describe('AssetPriceChartPanel', () => {
     expect(container.textContent).toContain('Final price');
     expect(container.textContent).toContain('Go to live market');
     expect(container.querySelector<HTMLAnchorElement>('[data-testid="go-live-market"]')?.getAttribute('href')).toBe(`/markets/btc-updown-5m-${liveStartAt + 300}`);
-    expect(container.querySelector('[data-testid="asset-price-line"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="asset-price-chart"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Round countdown"]')).toBeNull();
-    expect(container.querySelector('[data-testid="asset-price-canvas"]')).toBeNull();
+    expect(container.querySelector('[data-testid="go-live-market-dot-ping"]')).not.toBeNull();
   });
 
   it('calls the go-live cleanup callback from the CTA', () => {
@@ -227,8 +301,9 @@ describe('AssetPriceChartPanel', () => {
     expect(html).toContain('number-flow-react');
     expect(html).toContain('Go to live market');
     expect(html).toContain('data-testid="go-live-market"');
-    expect(html).toContain('data-testid="asset-price-line"');
-    expect(html).not.toContain('data-testid="asset-price-canvas"');
+    expect(html).toContain('data-testid="go-live-market-dot-ping"');
+    expect(html).toContain('data-tone="neutral"');
+    expect(html).toContain('data-testid="asset-price-chart"');
   });
 
   it('prioritizes websocket market current price over stale REST series on live rounds', () => {
@@ -297,7 +372,7 @@ describe('AssetPriceChartPanel', () => {
     expect(html).toContain(formatEtRoundWindow(liveStartAt, liveStartAt + 300));
     expect(html).toContain('Current Price');
     expect(html).toContain('<span>-</span>');
-    expect(html).toContain('data-testid="asset-price-canvas"');
+    expect(html).toContain('data-testid="asset-price-chart"');
     expect(html).not.toContain(formatEtRoundWindow(staleStartAt, staleStartAt + 300));
     expect(html).not.toContain('$80,797.28');
   });

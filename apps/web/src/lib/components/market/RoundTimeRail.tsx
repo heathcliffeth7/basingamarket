@@ -1,17 +1,21 @@
 import Link from 'next/link';
 import { ChevronDown } from 'lucide-react';
 import type { RoundHistory, RoundHistoryItem } from '@/lib/api/types';
+import type { PriceLeadTone } from '@/lib/markets/priceLead';
 import { formatEtRoundDate, formatEtRoundTime } from '@/lib/markets/time';
+import LivePingDot from './LivePingDot';
 
 export default function RoundTimeRail({
   history,
   selectedStartAt,
   liveStartAt,
+  liveTone = 'down',
   roundHref
 }: {
   history: RoundHistory | null | undefined;
   selectedStartAt?: number;
   liveStartAt?: number;
+  liveTone?: PriceLeadTone;
   roundHref?: (round: RoundHistoryItem) => string;
 }) {
   if (!history || history.rounds.length === 0) return null;
@@ -46,7 +50,7 @@ export default function RoundTimeRail({
                 : 'border-terminal-line bg-terminal-panel text-terminal-muted hover:text-terminal-text'
             }`}
           >
-            {live ? <span data-testid="live-round-dot" className="h-2.5 w-2.5 rounded-full bg-market-negative animate-pulse" /> : null}
+            {live ? <LivePingDot testId="live-round-dot" tone={liveTone} /> : null}
             {formatEtRoundTime(round.start_at)}
           </Link>
         );

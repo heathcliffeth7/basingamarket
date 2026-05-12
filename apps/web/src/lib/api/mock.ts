@@ -6,6 +6,7 @@ import type {
   MarketCurve,
   MarketPriceSeries,
   OrderBook,
+  ProfileActivity,
   Profile,
   RoundHistory,
   ShareCardResponse,
@@ -609,6 +610,44 @@ export const mockTickets: Ticket[] = [
     mood: 2
   }
 ];
+
+export function mockProfileActivity(address: string): ProfileActivity {
+  const tickets = mockTickets.filter((ticket) => ticket.current_owner === address || ticket.original_caller === address);
+  const totalPnl = tickets
+    .filter((ticket) => ticket.current_owner === address)
+    .reduce((total, ticket) => total + safeMockBigInt(ticket.realized_pnl_usdc), 0n);
+
+  return {
+    summary: {
+      total_pnl_usdc: totalPnl.toString()
+    },
+    items: tickets.map((ticket) => ({
+      id: `mock-buy-${ticket.ticket_id}`,
+      type: 'buy',
+      ticket_id: ticket.ticket_id,
+      market_id: ticket.market_id,
+      round_id: ticket.round_id,
+      outcome_id: ticket.outcome_id,
+      token_name: ticket.token_name ?? `market-${ticket.market_id}-round-${ticket.round_id}`,
+      side: ticket.outcome_id === 1 ? 'DOWN' : 'UP',
+      amount_usdc: ticket.cost_basis_usdc ?? ticket.stake_amount,
+      shares: ticket.token_amount ?? ticket.reward_shares,
+      pnl_usdc: ticket.current_owner === address ? ticket.realized_pnl_usdc : null,
+      counterparty: null,
+      created_at: now,
+      ticket
+    }))
+  };
+}
+
+function safeMockBigInt(value: string | null | undefined) {
+  if (!value) return 0n;
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
 
 export const mockOrderBooks: Record<string, OrderBook> = {
   '1': {

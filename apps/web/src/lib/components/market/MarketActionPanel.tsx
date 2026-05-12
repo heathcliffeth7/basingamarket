@@ -175,7 +175,7 @@ export default function MarketActionPanel({
         side: selectedSide,
         usdcIn: amountBaseUnits,
         accessToken,
-        onRoundRetry: () => setStatusMessage('Devnet round hazırlanıyor...')
+        onRoundRetry: () => setStatusMessage('Preparing devnet round...')
       });
       return result;
     },

@@ -1,10 +1,10 @@
-import { act } from 'react';
+import { act, type AnchorHTMLAttributes, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '@/lib/api/client';
 import { cashBalanceQueryKey } from '@/lib/api/cashBalanceQuery';
-import type { Ticket } from '@/lib/api/types';
+import type { ProfileActivityItem, Ticket } from '@/lib/api/types';
 import ProfilePage from './page';
 
 const routeState = vi.hoisted(() => ({
@@ -19,6 +19,7 @@ const authState = vi.hoisted(() => ({
 const apiMock = vi.hoisted(() => ({
   getProfile: vi.fn(),
   getProfileTickets: vi.fn(),
+  getProfileActivity: vi.fn(),
   getMarkets: vi.fn(),
   getMarketTickets: vi.fn(),
   claimTicket: vi.fn()
@@ -26,6 +27,12 @@ const apiMock = vi.hoisted(() => ({
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ address: routeState.address })
+}));
+
+vi.mock('next/link', () => ({
+  default: ({ href, children, ...props }: { href: string; children?: ReactNode } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} {...props}>{children}</a>
+  )
 }));
 
 vi.mock('@/lib/auth/privy', () => ({
@@ -52,6 +59,7 @@ describe('ProfilePage claim activity', () => {
       avatar_url: null
     }));
     apiMock.getProfileTickets.mockResolvedValue([]);
+    apiMock.getProfileActivity.mockResolvedValue(profileActivity([]));
     apiMock.getMarkets.mockReset();
     apiMock.getMarketTickets.mockReset();
     apiMock.claimTicket.mockReset();
@@ -66,6 +74,21 @@ describe('ProfilePage claim activity', () => {
     vi.clearAllMocks();
   });
 
+  it('renders the profile shell immediately while profile data is still loading', () => {
+    apiMock.getProfile.mockReturnValue(new Promise(() => {}));
+    apiMock.getProfileTickets.mockReturnValue(new Promise(() => {}));
+    apiMock.getProfileActivity.mockReturnValue(new Promise(() => {}));
+
+    const { container } = mountProfile(mountedRoots);
+
+    expect(container.textContent).toContain('Unnamed wallet');
+    expect(container.textContent).toContain(owner);
+    expect(container.textContent).toContain('Loading profile...');
+    expect(container.textContent).toContain('Profit/Loss');
+    expect(container.textContent).toContain('Activity');
+    expect(container.textContent).not.toContain('share card');
+  });
+
   it('loads profile tickets from one endpoint and lets the connected owner claim refundable tickets', async () => {
     const refundableTicket = profileTicket({
       current_owner: owner,
@@ -76,8 +99,9 @@ describe('ProfilePage claim activity', () => {
     });
     let profileTickets = [refundableTicket];
     apiMock.getProfileTickets.mockImplementation(() => Promise.resolve(profileTickets));
+    apiMock.getProfileActivity.mockResolvedValue(profileActivity([]));
     apiMock.claimTicket.mockImplementation(async () => {
-      const claimedTicket = { ...refundableTicket, status: 'claimed', claimed: true };
+      const claimedTicket: Ticket = { ...refundableTicket, status: 'claimed', claimed: true };
       profileTickets = [claimedTicket];
       return {
         status: 'claimed',
@@ -90,6 +114,7 @@ describe('ProfilePage claim activity', () => {
 
     const { container, queryClient } = mountProfile(mountedRoots);
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    await clickTab(container, 'Positions');
 
     await vi.waitFor(() => {
       expect(container.textContent).toContain('refundable');
@@ -118,6 +143,7 @@ describe('ProfilePage claim activity', () => {
       });
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profile-positions', owner] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profile-activity', owner] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['ticket', refundableTicket.ticket_id] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-tickets', '1', '5928474'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: cashBalanceQueryKey(owner) });
@@ -139,6 +165,7 @@ describe('ProfilePage claim activity', () => {
     apiMock.getProfileTickets.mockResolvedValue([refundableTicket]);
 
     const { container } = mountProfile(mountedRoots);
+    await clickTab(container, 'Positions');
 
     await vi.waitFor(() => {
       expect(container.textContent).toContain('Claimable');
@@ -159,13 +186,56 @@ describe('ProfilePage claim activity', () => {
     apiMock.getProfileTickets.mockResolvedValue([claimedTicket]);
 
     const { container } = mountProfile(mountedRoots);
+    await clickTab(container, 'Positions');
 
     await vi.waitFor(() => {
-      expect(container.textContent).toContain('Claimed');
+      expect(container.textContent).toContain('No open or claimable positions found.');
     });
-    expect(container.textContent).not.toContain('Claimable');
     expect(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).some((button) => button.textContent?.trim() === 'Claim')).toBe(false);
     expect(api.claimTicket).not.toHaveBeenCalled();
+  });
+
+  it('renders real buy and sell activity with settled pnl before redeem', async () => {
+    const settledTicket = profileTicket({
+      status: 'won',
+      settlement_value_usdc: '1500000',
+      realized_pnl_usdc: '500000'
+    });
+    const soldTicket = profileTicket({
+      ticket_id: '5278686580678953555',
+      current_owner: otherWallet,
+      original_caller: owner,
+      status: 'active'
+    });
+    apiMock.getProfileTickets.mockResolvedValue([settledTicket, soldTicket]);
+    apiMock.getProfileActivity.mockResolvedValue(profileActivity([
+      profileActivityItem({
+        id: 'resale-sell-signature',
+        type: 'sell',
+        ticket: soldTicket,
+        amount_usdc: '1250000',
+        pnl_usdc: '250000',
+        counterparty: otherWallet
+      }),
+      profileActivityItem({
+        id: 'cash-buy-signature',
+        type: 'buy',
+        ticket: settledTicket,
+        amount_usdc: '1000000',
+        pnl_usdc: '500000'
+      })
+    ], '750000'));
+
+    const { container } = mountProfile(mountedRoots);
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Buy');
+      expect(container.textContent).toContain('Sell');
+      expect(container.textContent).toContain('+$0.75');
+      expect(container.textContent).toContain('+$0.50');
+      expect(container.textContent).toContain('+$0.25');
+    });
+    expect(container.textContent).not.toContain('Redeem');
   });
 });
 
@@ -191,6 +261,17 @@ function mountProfile(mountedRoots: Root[]) {
   return { container, queryClient };
 }
 
+async function clickTab(container: HTMLElement, label: string) {
+  await vi.waitFor(() => {
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).some((button) => button.textContent?.trim() === label)).toBe(true);
+  });
+  const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+    .find((button) => button.textContent?.trim() === label);
+  await act(async () => {
+    tab?.click();
+  });
+}
+
 function profileTicket(overrides: Partial<Ticket> = {}): Ticket {
   return {
     ticket_id: '5278686580678953554',
@@ -213,6 +294,38 @@ function profileTicket(overrides: Partial<Ticket> = {}): Ticket {
     claimed: false,
     confidence: 70,
     mood: 1,
+    ...overrides
+  };
+}
+
+function profileActivity(items: ProfileActivityItem[], totalPnl = '0') {
+  return {
+    summary: {
+      total_pnl_usdc: totalPnl
+    },
+    items
+  };
+}
+
+function profileActivityItem({
+  ticket,
+  ...overrides
+}: Partial<ProfileActivityItem> & { ticket: Ticket }): ProfileActivityItem {
+  return {
+    id: `activity-${ticket.ticket_id}`,
+    type: 'buy',
+    ticket_id: ticket.ticket_id,
+    market_id: ticket.market_id,
+    round_id: ticket.round_id,
+    outcome_id: ticket.outcome_id,
+    token_name: ticket.token_name ?? '',
+    side: ticket.outcome_id === 1 ? 'DOWN' : 'UP',
+    amount_usdc: ticket.cost_basis_usdc ?? ticket.stake_amount,
+    shares: ticket.token_amount ?? ticket.reward_shares,
+    pnl_usdc: ticket.realized_pnl_usdc,
+    counterparty: null,
+    created_at: '2026-05-12T00:00:00Z',
+    ticket,
     ...overrides
   };
 }

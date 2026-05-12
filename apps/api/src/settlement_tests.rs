@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use basingamarket_db::{
-    CashBalanceRow, CashTradeReservationRow, CashTradeRow, InMemoryProjectionStore,
+    CashBalanceRow, CashResaleRow, CashTradeReservationRow, CashTradeRow, InMemoryProjectionStore,
     ProjectionEngine,
 };
 use basingamarket_protocol_events::ProtocolEvent;
@@ -216,6 +216,81 @@ async fn profile_tickets_filter_wallet_and_settle_related_rounds() {
             .unwrap()["current_owner"],
         OTHER
     );
+}
+
+#[tokio::test]
+async fn profile_activity_shows_trade_feed_and_unredeemed_pnl() {
+    let round_id = 5_666_671;
+    let state = state_with_price(round_id, 200_000_000).await;
+    cash_ticket(&state, WALLET, 300, round_id, "UP").await;
+    cash_ticket(&state, OTHER, 301, round_id, "DOWN").await;
+    cash_ticket(&state, WALLET, 302, round_id, "UP").await;
+    let now = chrono::Utc::now();
+    state
+        .store
+        .upsert_cash_balance(CashBalanceRow {
+            wallet_address: OTHER.to_owned(),
+            cash_balance: 100_000_000,
+            updated_at: now,
+        })
+        .await;
+    state
+        .store
+        .record_cash_resale(CashResaleRow {
+            sale_id: "profile-activity-sale".to_owned(),
+            signature: "profile-activity-sale-signature".to_owned(),
+            bid_id: None,
+            market_id: 1,
+            round_id,
+            seller_wallet: WALLET.to_owned(),
+            buyer_wallet: OTHER.to_owned(),
+            source_lot_id: 302,
+            buyer_lot_id: None,
+            side: "UP".to_owned(),
+            tickets_sold: 20_000_000,
+            gross_usdc: 25_000_000,
+            resale_fee: 0,
+            early_flip_fee: 0,
+            seller_receives: 25_000_000,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/profiles/{WALLET}/activity"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let items = json["items"].as_array().unwrap();
+    let types = items
+        .iter()
+        .map(|item| item["type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(types.contains(&"buy"));
+    assert!(types.contains(&"sell"));
+    assert!(!types.contains(&"redeem"));
+    assert_eq!(json["summary"]["total_pnl_usdc"], "15000000");
+    let buy = items
+        .iter()
+        .find(|item| item["type"] == "buy" && item["ticket_id"] == "300")
+        .unwrap();
+    assert_eq!(buy["pnl_usdc"], "10000000");
+    assert_eq!(buy["ticket"]["status"], "won");
+    let sell = items
+        .iter()
+        .find(|item| item["type"] == "sell" && item["ticket_id"] == "302")
+        .unwrap();
+    assert_eq!(sell["amount_usdc"], "25000000");
+    assert_eq!(sell["pnl_usdc"], "5000000");
 }
 
 #[tokio::test]

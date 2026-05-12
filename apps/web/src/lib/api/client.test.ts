@@ -203,6 +203,51 @@ describe('api client', () => {
     expect(onRoundRetry).toHaveBeenCalledWith(1);
   });
 
+  it('retries transient opening batch errors before market buy succeeds', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', 'http://api.test');
+    vi.stubEnv('NEXT_PUBLIC_USE_MOCK_FALLBACK', 'false');
+    const onRoundRetry = vi.fn();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({ code: 'opening_batch_active' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          status: 'confirmed',
+          execution_type: 'fresh_curve',
+          signature: 'devnet-signature',
+          explorer_url: 'https://explorer.solana.com/tx/devnet-signature?cluster=devnet',
+          spent_usdc: '1000000',
+          received_tickets: '1989961',
+          lot_id: '42',
+          cash_balance: '4000000'
+        })
+      });
+    vi.stubGlobal('fetch', fetch);
+    const { api: liveApi } = await import('./client');
+
+    await expect(liveApi.executeMarketBuy({
+      roundId: '5928355',
+      marketId: '1',
+      buyerWallet: SOLANA_DEVNET_PUBKEY,
+      side: 'UP',
+      usdcIn: '1000000',
+      accessToken: 'privy-access-token',
+      roundRetryDelayMs: 0,
+      onRoundRetry
+    })).resolves.toMatchObject({
+      execution_type: 'fresh_curve',
+      spent_usdc: '1000000'
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(onRoundRetry).toHaveBeenCalledWith(1);
+  });
+
   it('stops retrying devnet round preparation errors after the configured attempts', async () => {
     vi.resetModules();
     vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', 'http://api.test');
@@ -252,6 +297,10 @@ describe('api client', () => {
       new ApiClientError({ status: 404, code: 'market_not_initialized', path: '/rounds/1/buy-intent' }),
       '/rounds/1/buy-intent'
     );
+    const openingBatchActive = normalizeBuyIntentError(
+      new ApiClientError({ status: 400, code: 'opening_batch_active', path: '/rounds/1/market-buy' }),
+      '/rounds/1/market-buy'
+    );
 
     expect(routeMissing).toBeInstanceOf(ApiClientError);
     expect((routeMissing as ApiClientError).message).toBe('Buy intent API is not available. Restart the dev API.');
@@ -263,6 +312,9 @@ describe('api client', () => {
     expect((programMissing as ApiClientError).message).toBe('Devnet program is not deployed.');
     expect((globalMissing as ApiClientError).message).toBe('Devnet global config is not initialized.');
     expect((marketMissing as ApiClientError).message).toBe('Devnet market is not initialized.');
+    expect(openingBatchActive).toBeInstanceOf(ApiClientError);
+    expect((openingBatchActive as ApiClientError).message).toBe('Devnet round is opening. Retry in a moment.');
+    expect(isTransientDevnetRoundError(openingBatchActive)).toBe(true);
   });
 
   it('reads profile cash balances from the cash projection endpoint', async () => {

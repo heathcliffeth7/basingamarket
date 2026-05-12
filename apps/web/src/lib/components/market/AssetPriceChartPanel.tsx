@@ -2,20 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import NumberFlow, { NumberFlowGroup } from '@number-flow/react';
-import { Check, ChevronDown, ChevronRight, TrendingDown, TrendingUp } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import type { Market, MarketCurve, MarketPricePoint, MarketPriceSeries } from '@/lib/api/types';
 import type { LivePriceStore } from '@/lib/api/livePriceStore';
 import type { LiveTickerUpdate } from '@/lib/api/livePrices';
+import { derivePriceLead, type PriceLead, type PriceLeadTone } from '@/lib/markets/priceLead';
 import { priceSeriesForSelectedRound } from '@/lib/markets/roundDataGuards';
 import { liveMarketRoundHref } from '@/lib/markets/routes';
 import { formatEtChartTime, formatEtRoundWindow } from '@/lib/markets/time';
 import { formatUsdPrice, scaledUsdToNumber } from '@/lib/utils/amount';
-import LiveAssetPriceCanvas from './LiveAssetPriceCanvas';
-
-type ChartPoint = MarketPricePoint & {
-  x: number;
-  y: number;
-};
+import { Liveline } from 'liveline';
+import type { LivelinePoint } from 'liveline';
+import LivePingDot from './LivePingDot';
 
 const PRICE_NUMBER_FORMAT = {
   style: 'currency',
@@ -27,6 +25,7 @@ const PRICE_NUMBER_FORMAT = {
 const PRICE_FLOW_TIMING = { duration: 160, easing: 'ease-out' } satisfies EffectTiming;
 const PRICE_FLOW_SPIN_TIMING = { duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' } satisfies EffectTiming;
 const PRICE_FLOW_OPACITY_TIMING = { duration: 120, easing: 'ease-out' } satisfies EffectTiming;
+const PRICE_READOUT_FLUSH_INTERVAL_MS = 250;
 const MARKET_SWITCHER_DURATIONS = [
   { label: '1 Min', durationSeconds: 60 },
   { label: '5 Min', durationSeconds: 300 }
@@ -89,9 +88,11 @@ export default function AssetPriceChartPanel({
     () => buildPriceModel(market, selectedSeries, selectedStartAt, liveWindowActive, livePrice?.currentPrice ?? null, nowTs),
     [livePrice?.currentPrice, liveWindowActive, market, nowTs, selectedSeries, selectedStartAt]
   );
-  const useLiveCanvas = liveWindowActive && !model.closed;
-  const chart = useMemo(() => useLiveCanvas ? null : buildChartView(model.points, model.openPrice), [model.openPrice, model.points, useLiveCanvas]);
-  const delta = useMemo(() => priceDelta(model.openPrice, model.displayPrice), [model.displayPrice, model.openPrice]);
+  const priceLead = useMemo(() => derivePriceLead(model.openPrice, model.displayPrice), [model.displayPrice, model.openPrice]);
+  const chartData = useMemo(() => buildLivelineData(model.points), [model.points]);
+  const latestValue = useMemo(() => scaledUsdToNumber(model.displayPrice) ?? 0, [model.displayPrice]);
+  const openPriceNum = useMemo(() => scaledUsdToNumber(model.openPrice), [model.openPrice]);
+  const chartColor = useMemo(() => priceLeadColor(priceLead.tone), [priceLead.tone]);
   const marketSwitcherMarkets = useMemo(() => {
     if (!market) {
       return switcherMarkets;
@@ -133,6 +134,7 @@ export default function AssetPriceChartPanel({
           <MarketSwitcher
             currentAsset={model.header.asset}
             currentDurationSeconds={model.header.duration_seconds}
+            priceLeadTone={priceLead.tone}
             markets={marketSwitcherMarkets}
             curves={switcherCurves}
             nowMs={nowTs * 1000}
@@ -146,8 +148,8 @@ export default function AssetPriceChartPanel({
             <AnimatedPriceReadout
               label={model.closed ? 'Final price' : 'Current Price'}
               value={model.displayPrice}
-              accent={!model.closed}
-              delta={delta}
+              tone={priceLead.tone}
+              lead={priceLead}
               animate={!model.closed && liveWindowActive}
             />
           </div>
@@ -161,65 +163,32 @@ export default function AssetPriceChartPanel({
               data-testid="go-live-market"
               className="inline-flex h-11 shrink-0 items-center gap-2.5 rounded-full bg-terminal-panel-strong px-5 text-sm font-black text-terminal-text transition hover:bg-terminal-line-strong"
             >
-              <span className="h-2.5 w-2.5 rounded-full bg-market-negative" />
+              <LivePingDot testId="go-live-market-dot" tone={priceLead.tone} />
               Go to live market
               <ChevronRight size={18} />
             </a>
           )}
         </div>
 
-        <div className="relative mt-4 min-h-[240px] sm:min-h-[280px]" aria-label="Underlying asset price chart">
-          <svg className="h-full min-h-[240px] w-full sm:min-h-[280px]" viewBox="0 0 1120 280" role="img" aria-label={`${model.header.asset} price line`}>
-            <defs>
-              <linearGradient id="asset-price-fill" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor="rgba(245,158,11,0.12)" />
-                <stop offset="100%" stopColor="rgba(245,158,11,0.00)" />
-              </linearGradient>
-            </defs>
-            <rect x="0" y="0" width="1120" height="280" fill="transparent" />
-            {chart ? (
-              <>
-                {chart.gridLines.map((line) => (
-                  <g key={line.y}>
-                    <line x1="0" x2="1000" y1={line.y} y2={line.y} stroke="rgba(148,163,184,0.12)" strokeWidth="1" />
-                    <text x="1014" y={line.y + 4} fill="#94a3b8" fontSize="12" fontFamily="var(--font-mono)">
-                      {line.label}
-                    </text>
-                  </g>
-                ))}
-                {chart.targetY ? (
-                  <g>
-                    <line x1="0" x2="1000" y1={chart.targetY} y2={chart.targetY} stroke="rgba(245,158,11,0.70)" strokeDasharray="7 9" strokeWidth="2" />
-                    <rect x="990" y={chart.targetY - 12} width="72" height="24" rx="12" fill="#64748b" />
-                    <text x="1026" y={chart.targetY + 4} fill="#f8fafc" fontSize="12" fontWeight="800" textAnchor="middle">
-                      Target
-                    </text>
-                  </g>
-                ) : null}
-                <path d={`${chart.linePath} L ${chart.lastX} 238 L ${chart.firstX} 238 Z`} fill="url(#asset-price-fill)" />
-                <path data-testid="asset-price-line" className="asset-price-motion" d={chart.linePath} fill="none" stroke="#f59e0b" strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" />
-                {chart.lastPoint ? <circle className="asset-price-dot-motion" cx={chart.lastPoint.x} cy={chart.lastPoint.y} r="6" fill="#f59e0b" /> : null}
-                <line x1="0" x2="1000" y1="238" y2="238" stroke="rgba(148,163,184,0.24)" />
-                {chart.timeLabels.map((label) => (
-                  <text key={label.x} x={label.x} y="268" fill="#94a3b8" fontSize="12" fontFamily="var(--font-mono)" textAnchor={label.anchor}>
-                    {label.text}
-                  </text>
-                ))}
-              </>
-            ) : null}
-          </svg>
-          {useLiveCanvas ? (
-            <div className="absolute inset-0">
-              <LiveAssetPriceCanvas
-                symbol={model.header.symbol}
-                startAt={model.startAt}
-                endAt={model.endAt}
-                openPrice={model.openPrice}
-                points={model.points}
-                livePriceStore={livePriceStore}
-              />
-            </div>
-          ) : null}
+        <div data-testid="asset-price-chart" className="relative mt-4 h-[300px] sm:h-[360px]" aria-label="Underlying asset price chart">
+          <Liveline
+            data={chartData}
+            value={latestValue}
+            color={chartColor}
+            window={Math.max(60, durationSeconds)}
+            theme="dark"
+            grid
+            fill
+            pulse
+            lineWidth={2.5}
+            padding={{ top: 6, right: 70, bottom: 38, left: 8 }}
+            referenceLine={openPriceNum !== null ? { value: openPriceNum, label: 'Target' } : undefined}
+            formatValue={(v) => formatUsdPriceNumber(v)}
+            formatTime={(t) => formatEtChartTime(Math.floor(t))}
+            badge={false}
+            scrub={false}
+            momentum={false}
+          />
         </div>
       </div>
     </section>
@@ -229,12 +198,14 @@ export default function AssetPriceChartPanel({
 function MarketSwitcher({
   currentAsset,
   currentDurationSeconds,
+  priceLeadTone,
   markets,
   curves,
   nowMs
 }: {
   currentAsset: string;
   currentDurationSeconds: number;
+  priceLeadTone: PriceLeadTone;
   markets: Market[];
   curves: MarketSwitcherCurveMap;
   nowMs: number;
@@ -291,7 +262,7 @@ function MarketSwitcher({
         onClick={() => setOpen((value) => !value)}
         className="inline-flex h-11 items-center gap-2 rounded-full border border-terminal-line bg-terminal-panel-strong px-4 text-sm font-black text-terminal-text transition hover:border-terminal-line-strong hover:bg-terminal-line-strong"
       >
-        <span className="h-2.5 w-2.5 rounded-full bg-market-negative" />
+        <span data-tone={priceLeadTone} className={`h-2.5 w-2.5 rounded-full ${priceLeadBgClass(priceLeadTone)}`} />
         <span className="whitespace-nowrap">{currentAsset} · {formatMarketSwitcherDuration(currentDurationSeconds)}</span>
         <ChevronDown size={17} className={`transition ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
       </button>
@@ -461,27 +432,28 @@ function PriceReadout({
   label,
   value,
   muted = false,
-  accent = false,
-  delta = null
+  tone = 'neutral',
+  lead = null
 }: {
   label: string;
   value: string | null;
   muted?: boolean;
-  accent?: boolean;
-  delta?: ReturnType<typeof priceDelta>;
+  tone?: PriceLeadTone;
+  lead?: PriceLead | null;
 }) {
+  const textClass = muted ? 'text-terminal-muted' : priceLeadTextClass(tone);
   return (
     <div className="min-w-[150px]">
       <div className="flex items-center gap-2">
-        <p className={`text-sm font-black ${accent ? 'text-market-warning' : 'text-terminal-muted'}`}>{label}</p>
-        {delta ? (
-          <span className={`inline-flex items-center gap-1 text-xs font-black ${delta.positive ? 'text-market-success' : 'text-market-negative'}`}>
-            {delta.positive ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-            {delta.value}
+        <p className={`text-sm font-black ${muted ? 'text-terminal-muted' : textClass}`}>{label}</p>
+        {lead?.available ? (
+          <span className={`inline-flex items-center gap-1 text-xs font-black ${priceLeadTextClass(lead.tone)}`}>
+            <PriceLeadIcon tone={lead.tone} />
+            {lead.value}
           </span>
         ) : null}
       </div>
-      <p className={`mt-1 font-mono text-2xl font-black leading-none sm:text-3xl ${muted ? 'text-terminal-muted' : accent ? 'text-market-warning' : 'text-terminal-text'}`}>
+      <p className={`mt-1 font-mono text-2xl font-black leading-none sm:text-3xl ${textClass}`}>
         {formatUsdPrice(value)}
       </p>
     </div>
@@ -491,29 +463,30 @@ function PriceReadout({
 function AnimatedPriceReadout({
   label,
   value,
-  accent = false,
-  delta = null,
+  tone,
+  lead,
   animate = false
 }: {
   label: string;
   value: string | null;
-  accent?: boolean;
-  delta?: ReturnType<typeof priceDelta>;
+  tone: PriceLeadTone;
+  lead: PriceLead;
   animate?: boolean;
 }) {
-  const direction = usePriceDirection(value, animate, delta?.positive === false ? 'down' : 'up');
+  const direction = usePriceDirection(value, animate, tone === 'down' ? 'down' : 'up');
   const priceNumber = scaledUsdToNumber(value);
-  const deltaNumber = scaledUsdToNumber(delta?.amount ?? null);
+  const deltaNumber = scaledUsdToNumber(lead.amount);
+  const textClass = priceLeadTextClass(tone);
 
   return (
-    <div className="min-w-[150px]" data-testid="animated-price-readout" data-price-direction={direction}>
+    <div className="min-w-[150px]" data-testid="animated-price-readout" data-price-lead={tone} data-price-direction={direction}>
       <div className="flex items-center gap-2">
-        <p className={`text-sm font-black ${accent ? 'text-market-warning' : 'text-terminal-muted'}`}>{label}</p>
-        {delta ? (
-          <span className={`price-delta-flow inline-flex items-center gap-1 text-xs font-black ${delta.positive ? 'text-market-success' : 'text-market-negative'}`}>
-            {delta.positive ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+        <p className={`text-sm font-black ${textClass}`}>{label}</p>
+        {lead.available ? (
+          <span className={`price-delta-flow inline-flex items-center gap-1 text-xs font-black ${priceLeadTextClass(lead.tone)}`}>
+            <PriceLeadIcon tone={lead.tone} />
             {deltaNumber === null ? (
-              <span>{delta.value}</span>
+              <span>{lead.value}</span>
             ) : (
               <NumberFlow
                 value={deltaNumber}
@@ -530,7 +503,7 @@ function AnimatedPriceReadout({
         ) : null}
       </div>
       <NumberFlowGroup>
-        <p className={`mt-1 font-mono text-2xl font-black leading-none sm:text-3xl ${accent ? 'text-market-warning' : 'text-terminal-text'}`}>
+        <p className={`mt-1 font-mono text-2xl font-black leading-none sm:text-3xl ${textClass}`}>
           {priceNumber === null ? (
             <span>-</span>
           ) : (
@@ -550,6 +523,24 @@ function AnimatedPriceReadout({
       </NumberFlowGroup>
     </div>
   );
+}
+
+function PriceLeadIcon({ tone }: { tone: PriceLeadTone }) {
+  if (tone === 'up') return <TrendingUp size={14} aria-hidden="true" />;
+  if (tone === 'down') return <TrendingDown size={14} aria-hidden="true" />;
+  return <Minus size={14} aria-hidden="true" />;
+}
+
+function priceLeadTextClass(tone: PriceLeadTone) {
+  if (tone === 'up') return 'text-market-success';
+  if (tone === 'down') return 'text-market-negative';
+  return 'text-market-warning';
+}
+
+function priceLeadBgClass(tone: PriceLeadTone) {
+  if (tone === 'up') return 'bg-market-success';
+  if (tone === 'down') return 'bg-market-negative';
+  return 'bg-market-warning';
 }
 
 function Countdown({ endAt, nowTs }: { endAt: number; nowTs: number }) {
@@ -663,7 +654,7 @@ function useThrottledLivePrice(
       if (update.symbol !== symbol || update.ts < startAt || update.ts > endAt) return;
       latestRef.current = update;
       const now = performance.now();
-      const waitMs = Math.max(100 - (now - lastFlushRef.current), 0);
+      const waitMs = Math.max(PRICE_READOUT_FLUSH_INTERVAL_MS - (now - lastFlushRef.current), 0);
       if (waitMs === 0) {
         if (timerRef.current !== null) {
           window.clearTimeout(timerRef.current);
@@ -746,6 +737,27 @@ function normalizePoints(
   return [...previous, { ts: terminalTs, price: displayPrice }];
 }
 
+function priceLeadColor(tone: PriceLeadTone): string {
+  switch (tone) {
+    case 'up': return '#10b981';
+    case 'down': return '#ef4444';
+    case 'neutral': return '#f59e0b';
+  }
+}
+
+function formatUsdPriceNumber(value: number): string {
+  return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+}
+
+function buildLivelineData(points: MarketPricePoint[]): LivelinePoint[] {
+  return points
+    .filter((p) => scaledUsdToNumber(p.price) !== null)
+    .map((p) => ({
+      time: p.ts,
+      value: scaledUsdToNumber(p.price)!
+    }));
+}
+
 function usePriceDirection(value: string | null, enabled: boolean, fallback: 'up' | 'down') {
   const previousRef = useRef<string | null>(null);
   const [direction, setDirection] = useState<'up' | 'down'>(fallback);
@@ -768,67 +780,4 @@ function usePriceDirection(value: string | null, enabled: boolean, fallback: 'up
   }, [enabled, fallback, value]);
 
   return direction;
-}
-
-function buildChartView(points: MarketPricePoint[], openPrice: string | null) {
-  const usablePoints = points.length > 0 ? points : [{ ts: 0, price: '0' }, { ts: 1, price: '0' }];
-  const values = usablePoints.map((point) => BigInt(point.price));
-  const minValue = values.reduce((min, value) => value < min ? value : min, values[0]);
-  const maxValue = values.reduce((max, value) => value > max ? value : max, values[0]);
-  const spread = maxValue - minValue;
-  const pad = spread > 0n ? spread / 5n : maxValue / 2000n + 1_000_000n;
-  const minYValue = minValue - pad;
-  const maxYValue = maxValue + pad;
-  const valueRange = maxYValue - minYValue || 1n;
-  const minTs = Math.min(...usablePoints.map((point) => point.ts));
-  const maxTs = Math.max(...usablePoints.map((point) => point.ts), minTs + 1);
-  const chartTop = 14;
-  const chartHeight = 204;
-  const chartPoints: ChartPoint[] = usablePoints.map((point) => {
-    const x = ((point.ts - minTs) / Math.max(maxTs - minTs, 1)) * 1000;
-    const value = BigInt(point.price);
-    const y = chartTop + (1 - Number(value - minYValue) / Number(valueRange)) * chartHeight;
-    return { ...point, x, y };
-  });
-  const linePath = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
-  const targetY = openPrice
-    ? chartTop + (1 - Number(BigInt(openPrice) - minYValue) / Number(valueRange)) * chartHeight
-    : null;
-
-  return {
-    linePath,
-    firstX: chartPoints[0]?.x ?? 0,
-    lastX: chartPoints.at(-1)?.x ?? 1000,
-    lastPoint: chartPoints.at(-1) ?? null,
-    targetY,
-    gridLines: [0, 1, 2, 3, 4].map((index) => {
-      const value = maxYValue - ((maxYValue - minYValue) * BigInt(index)) / 4n;
-      return {
-        y: chartTop + (chartHeight * index) / 4,
-        label: formatUsdPrice(value)
-      };
-    }),
-    timeLabels: [0, 1, 2, 3, 4].map((index) => {
-      const ts = minTs + Math.round(((maxTs - minTs) * index) / 4);
-      return {
-        x: (1000 * index) / 4,
-        text: formatEtChartTime(ts),
-        anchor: index === 0 ? 'start' as const : index === 4 ? 'end' as const : 'middle' as const
-      };
-    })
-  };
-}
-
-function priceDelta(openPrice: string | null, displayPrice: string | null) {
-  if (!openPrice || !displayPrice) {
-    return null;
-  }
-
-  const diff = BigInt(displayPrice) - BigInt(openPrice);
-  const positive = diff >= 0n;
-  return {
-    positive,
-    amount: (positive ? diff : -diff).toString(),
-    value: formatUsdPrice(positive ? diff : -diff)
-  };
 }

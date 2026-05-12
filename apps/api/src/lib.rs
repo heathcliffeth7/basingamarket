@@ -5,10 +5,12 @@ mod chain_status;
 mod crypto_projection;
 mod deposit_repairs;
 mod deposits;
+mod devnet_round_bootstrap;
 mod error;
 mod health;
 mod http_config;
 mod metrics;
+mod profile_activity;
 mod profile_tickets;
 mod protocol_markets;
 mod round_settlement;
@@ -64,6 +66,7 @@ pub struct AppState {
     pub sol_deposit_price_provider: SolDepositPriceProvider,
     pub chain_config: SolanaDevnetConfig,
     pub(crate) busdc_reserve_backer: BusdcReserveBacker,
+    pub(crate) devnet_round_bootstrap_requests: devnet_round_bootstrap::DevnetRoundBootstrapQueue,
     projection_store_path: Option<Arc<PathBuf>>,
 }
 
@@ -87,6 +90,8 @@ impl AppState {
             sol_deposit_price_provider: SolDepositPriceProvider::binance(),
             chain_config,
             busdc_reserve_backer: BusdcReserveBacker::Script,
+            devnet_round_bootstrap_requests:
+                devnet_round_bootstrap::DevnetRoundBootstrapQueue::default(),
             projection_store_path: None,
         }
     }
@@ -245,6 +250,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health/ready", get(health::ready))
         .route("/chain/status", get(chain_status::chain_status))
         .route("/metrics", get(metrics::metrics))
+        .route(
+            "/_devnet/round-bootstrap-requests",
+            get(devnet_round_bootstrap::list_round_bootstrap_requests),
+        )
+        .route(
+            "/_devnet/round-bootstrap-requests/{market_id}/{round_id}",
+            delete(devnet_round_bootstrap::delete_round_bootstrap_request),
+        )
         .route("/markets", get(list_markets))
         .route("/markets/{id}", get(get_market))
         .route("/markets/{id}/curve", get(get_market_curve))
@@ -343,6 +356,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/profiles/{address}/tickets",
             get(profile_tickets::get_profile_tickets),
+        )
+        .route(
+            "/profiles/{address}/activity",
+            get(profile_activity::get_profile_activity),
         )
         .route("/profiles/{address}", get(get_profile))
         .route("/ws/markets/{id}", get(ws_market))

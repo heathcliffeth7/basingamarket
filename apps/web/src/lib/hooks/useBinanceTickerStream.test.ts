@@ -1,7 +1,50 @@
 import { describe, expect, it } from 'vitest';
-import { parseBinanceStreamMessage } from './useBinanceTickerStream';
+import { mockMarkets } from '@/lib/api/mock';
+import {
+  buildBinanceStreamPath,
+  flushLatestUpdates,
+  nextBufferedFlushDelay,
+  parseBinanceStreamMessage,
+  queueLatestUpdate
+} from './useBinanceTickerStream';
 
 describe('useBinanceTickerStream message parsing', () => {
+  it('builds aggTrade-only streams for live markets', () => {
+    const btc = {
+      ...mockMarkets[0],
+      price_header: {
+        ...mockMarkets[0].price_header!,
+        symbol: 'BTCUSDT',
+        price_display_state: 'live' as const
+      }
+    };
+    const eth = {
+      ...mockMarkets[1],
+      price_header: {
+        ...mockMarkets[1].price_header!,
+        symbol: 'ETHUSDT',
+        price_display_state: 'live' as const
+      }
+    };
+
+    expect(buildBinanceStreamPath([eth, btc])).toBe('btcusdt@aggTrade/ethusdt@aggTrade');
+  });
+
+  it('keeps only the latest queued update per symbol between throttled flushes', () => {
+    const queue = new Map();
+    queueLatestUpdate(queue, liveUpdate('BTCUSDT', '80800000000', 100));
+    queueLatestUpdate(queue, liveUpdate('ETHUSDT', '3100000000', 101));
+    queueLatestUpdate(queue, liveUpdate('BTCUSDT', '80810000000', 102));
+
+    expect(nextBufferedFlushDelay(1_000, 900)).toBe(25);
+    expect(nextBufferedFlushDelay(1_000, 800)).toBe(0);
+    expect(flushLatestUpdates(queue)).toMatchObject([
+      { symbol: 'BTCUSDT', currentPrice: '80810000000', ts: 102 },
+      { symbol: 'ETHUSDT', currentPrice: '3100000000', ts: 101 }
+    ]);
+    expect(queue.size).toBe(0);
+  });
+
   it('parses raw Binance trade messages with fractional timestamps', () => {
     const update = parseBinanceStreamMessage(JSON.stringify({
       stream: 'btcusdt@trade',
@@ -63,3 +106,14 @@ describe('useBinanceTickerStream message parsing', () => {
     });
   });
 });
+
+function liveUpdate(symbol: string, currentPrice: string, ts: number) {
+  return {
+    symbol,
+    currentPrice,
+    price: currentPrice,
+    ts,
+    direction: 'flat' as const,
+    fetchedAt: new Date(0).toISOString()
+  };
+}

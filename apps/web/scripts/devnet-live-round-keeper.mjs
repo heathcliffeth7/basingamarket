@@ -23,6 +23,7 @@ export function parseKeeperArgs(argv, env = process.env) {
   const options = {
     apiBaseUrl: normalizeBaseUrl(env.API_INTERNAL_BASE_URL || DEFAULT_API_BASE_URL),
     env: DEFAULT_ENV_PATH,
+    eager: false,
     intervalMs: DEFAULT_WATCH_INTERVAL_MS,
     lookaheadSeconds: DEFAULT_LOOKAHEAD_SECONDS,
     mode: 'once',
@@ -42,6 +43,10 @@ export function parseKeeperArgs(argv, env = process.env) {
     }
     if (flag === '--watch') {
       options.mode = 'watch';
+      continue;
+    }
+    if (flag === '--eager') {
+      options.eager = true;
       continue;
     }
     if (flag === '--no-wait') {
@@ -76,6 +81,17 @@ export function marketsUrlForApiBaseUrl(apiBaseUrl = DEFAULT_API_BASE_URL) {
   return new URL('/markets', normalizeBaseUrl(apiBaseUrl)).toString();
 }
 
+export function bootstrapRequestsUrlForApiBaseUrl(apiBaseUrl = DEFAULT_API_BASE_URL) {
+  return new URL('/_devnet/round-bootstrap-requests', normalizeBaseUrl(apiBaseUrl)).toString();
+}
+
+export function bootstrapRequestUrlForTask(task, apiBaseUrl = DEFAULT_API_BASE_URL) {
+  return new URL(
+    `/_devnet/round-bootstrap-requests/${task.marketId}/${task.roundId}`,
+    normalizeBaseUrl(apiBaseUrl)
+  ).toString();
+}
+
 export async function fetchMarkets({ apiBaseUrl = DEFAULT_API_BASE_URL, fetchImpl = globalThis.fetch } = {}) {
   const response = await fetchImpl(marketsUrlForApiBaseUrl(apiBaseUrl), {
     cache: 'no-store',
@@ -85,6 +101,26 @@ export async function fetchMarkets({ apiBaseUrl = DEFAULT_API_BASE_URL, fetchImp
   const payload = await response.json();
   if (!Array.isArray(payload)) throw new Error('/markets did not return an array');
   return payload;
+}
+
+export async function fetchBootstrapRequests({ apiBaseUrl = DEFAULT_API_BASE_URL, fetchImpl = globalThis.fetch } = {}) {
+  const response = await fetchImpl(bootstrapRequestsUrlForApiBaseUrl(apiBaseUrl), {
+    cache: 'no-store',
+    headers: { accept: 'application/json' }
+  });
+  if (!response.ok) throw new Error(`API ${response.status} while fetching devnet round bootstrap requests`);
+  const payload = await response.json();
+  if (!Array.isArray(payload)) throw new Error('/_devnet/round-bootstrap-requests did not return an array');
+  return payload;
+}
+
+export async function deleteBootstrapRequest({ apiBaseUrl = DEFAULT_API_BASE_URL, fetchImpl = globalThis.fetch, task }) {
+  const response = await fetchImpl(bootstrapRequestUrlForTask(task, apiBaseUrl), {
+    method: 'DELETE',
+    cache: 'no-store',
+    headers: { accept: 'application/json' }
+  });
+  if (!response.ok) throw new Error(`API ${response.status} while deleting devnet round bootstrap request`);
 }
 
 export function buildLiveRoundBootstrapTasks(
@@ -150,41 +186,97 @@ export function buildLiveRoundBootstrapTasks(
   );
 }
 
+export function buildRequestedRoundBootstrapTasks(requests) {
+  const tasks = [];
+  const seen = new Set();
+  for (const request of requests) {
+    const asset = String(request?.asset ?? '').toUpperCase();
+    const durationSeconds = Number(request?.duration_seconds);
+    const marketId = Number(request?.market_id);
+    const roundId = Number(request?.round_id);
+    if (!SUPPORTED_ASSETS.has(asset) || !SUPPORTED_DURATIONS.has(durationSeconds)) continue;
+    if (!Number.isSafeInteger(marketId) || !Number.isSafeInteger(roundId) || roundId <= 0) continue;
+    if (marketId !== defaultMarketId(asset, durationSeconds)) continue;
+    const startAt = Number(request?.start_at);
+    const endAt = Number(request?.end_at);
+    if (!Number.isFinite(startAt) || !Number.isFinite(endAt)) continue;
+    const task = {
+      asset,
+      durationSeconds,
+      endAt,
+      interval: intervalForDuration(durationSeconds),
+      lookahead: false,
+      marketId,
+      requested: true,
+      roundId,
+      startAt
+    };
+    const key = taskKey(task);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tasks.push(task);
+  }
+  return tasks.sort((left, right) => left.marketId - right.marketId || left.roundId - right.roundId);
+}
+
 export async function fetchLiveRoundBootstrapTasks({ apiBaseUrl, fetchImpl, lookaheadSeconds } = {}) {
   return buildLiveRoundBootstrapTasks(await fetchMarkets({ apiBaseUrl, fetchImpl }), { lookaheadSeconds });
 }
 
+export async function fetchRequestedRoundBootstrapTasks({ apiBaseUrl, fetchImpl } = {}) {
+  return buildRequestedRoundBootstrapTasks(await fetchBootstrapRequests({ apiBaseUrl, fetchImpl }));
+}
+
+export async function fetchRoundBootstrapTasks(options, deps = {}) {
+  if (options.eager) {
+    return fetchLiveRoundBootstrapTasks({
+      apiBaseUrl: options.apiBaseUrl,
+      fetchImpl: deps.fetchImpl,
+      lookaheadSeconds: options.lookaheadSeconds
+    });
+  }
+  return fetchRequestedRoundBootstrapTasks({
+    apiBaseUrl: options.apiBaseUrl,
+    fetchImpl: deps.fetchImpl
+  });
+}
+
 export async function bootstrapLiveRoundTask(task, options, deps = {}) {
   const bootstrap = deps.bootstrapDevnetRound ?? bootstrapDevnetRound;
+  const isOnDemandRequest = task.requested && !options.eager;
   return bootstrap({
     asset: task.asset,
     durationSeconds: task.durationSeconds,
     env: options.env,
     marketId: task.marketId,
-    openingBatchSeconds: options.openingBatchSeconds,
+    openingBatchSeconds: isOnDemandRequest ? 0 : options.openingBatchSeconds,
     payer: options.payer,
     programId: options.programId,
     roundId: task.roundId,
     rpcUrl: options.rpcUrl,
-    wait: options.wait,
+    wait: isOnDemandRequest ? false : options.wait,
     wsUrl: options.wsUrl
   });
 }
 
 export async function runKeeperCycle(options, state = new Set(), deps = {}) {
   const log = deps.log ?? console.log;
-  const tasks = deps.tasks ?? await fetchLiveRoundBootstrapTasks({
-    apiBaseUrl: options.apiBaseUrl,
-    fetchImpl: deps.fetchImpl,
-    lookaheadSeconds: options.lookaheadSeconds
-  });
+  const tasks = deps.tasks ?? await fetchRoundBootstrapTasks(options, deps);
   const results = [];
   for (const task of tasks) {
     const key = taskKey(task);
     if (state.has(key)) continue;
-    const timing = task.lookahead ? 'next' : 'current';
+    const timing = task.requested ? 'requested' : task.lookahead ? 'next' : 'current';
     log(`[devnet-live] bootstrapping ${timing} ${task.asset} ${task.interval} round ${task.roundId} (market ${task.marketId})`);
     const result = await bootstrapLiveRoundTask(task, options, deps);
+    if (!options.eager && task.requested) {
+      const clearRequest = deps.deleteBootstrapRequest ?? deleteBootstrapRequest;
+      await clearRequest({
+        apiBaseUrl: options.apiBaseUrl,
+        fetchImpl: deps.fetchImpl,
+        task
+      });
+    }
     state.add(key);
     results.push(result);
     const sentLabels = result.sent.map(([label]) => label).join(', ') || 'already initialized';
@@ -201,7 +293,8 @@ export async function runKeeper(options, deps = {}) {
   }
 
   const log = deps.log ?? console.log;
-  log(`[devnet-live] watching ${options.apiBaseUrl} every ${options.intervalMs}ms`);
+  const source = options.eager ? 'live markets eagerly' : 'on-demand round requests';
+  log(`[devnet-live] watching ${source} at ${options.apiBaseUrl} every ${options.intervalMs}ms`);
   while (true) {
     try {
       await runKeeperCycle(options, state, deps);
@@ -217,6 +310,11 @@ export async function runKeeper(options, deps = {}) {
 export function formatKeeperError(error) {
   if (!(error instanceof Error)) return String(error);
   const parts = [error.message];
+  const logs = error.context?.logs;
+  if (Array.isArray(logs)) {
+    const fundingLog = logs.find((line) => typeof line === 'string' && line.toLowerCase().includes('insufficient lamports'));
+    if (fundingLog) parts.push(fundingLog);
+  }
   const cause = error.cause;
   if (cause instanceof Error && cause.message && cause.message !== error.message) {
     parts.push(cause.message);
@@ -253,9 +351,10 @@ function printHelp() {
   npm run bootstrap:devnet-live
   npm run bootstrap:devnet-live -- --once
   npm run bootstrap:devnet-live:watch
+  npm run bootstrap:devnet-live:watch -- --eager
   npm run bootstrap:devnet-live -- --api-base-url http://127.0.0.1:8080
 
-Bootstraps current and near-boundary next BTC/ETH/SOL 1m and 5m live devnet rounds from the API /markets response.`);
+Bootstraps requested BTC/ETH/SOL 1m and 5m live devnet rounds. Pass --eager to pre-bootstrap current and near-boundary next rounds from the API /markets response.`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

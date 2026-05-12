@@ -177,6 +177,30 @@ export const ClaimTicketSchema = z.object({
   ticket: TicketSchema
 });
 
+export const ProfileActivityItemSchema = z.object({
+  id: z.string(),
+  type: z.enum(['buy', 'sell', 'redeem']),
+  ticket_id: z.string(),
+  market_id: z.string(),
+  round_id: z.string(),
+  outcome_id: z.number(),
+  token_name: z.string(),
+  side: z.enum(['UP', 'DOWN']),
+  amount_usdc: z.string(),
+  shares: z.string(),
+  pnl_usdc: z.string().optional().nullable(),
+  counterparty: z.string().optional().nullable(),
+  created_at: z.string(),
+  ticket: TicketSchema
+});
+
+export const ProfileActivitySchema = z.object({
+  summary: z.object({
+    total_pnl_usdc: z.string()
+  }),
+  items: z.array(ProfileActivityItemSchema)
+});
+
 export const BuyIntentInstructionAccountSchema = z.object({
   pubkey: z.string(),
   is_signer: z.boolean(),
@@ -540,6 +564,8 @@ export type CanvasNode = z.infer<typeof CanvasNodeSchema>;
 export type CanvasResponse = z.infer<typeof CanvasResponseSchema>;
 export type Ticket = z.infer<typeof TicketSchema>;
 export type ClaimTicket = z.infer<typeof ClaimTicketSchema>;
+export type ProfileActivityItem = z.infer<typeof ProfileActivityItemSchema>;
+export type ProfileActivity = z.infer<typeof ProfileActivitySchema>;
 export type BuyIntent = z.infer<typeof BuyIntentSchema>;
 export type BuyIntentInstructionAccount = z.infer<typeof BuyIntentInstructionAccountSchema>;
 export type CashBuy = z.infer<typeof CashBuySchema>;

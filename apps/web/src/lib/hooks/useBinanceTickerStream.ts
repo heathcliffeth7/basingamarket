@@ -5,6 +5,7 @@ import { decimalPriceToScaledString, type LiveTickerUpdate } from '@/lib/api/liv
 import type { Market } from '@/lib/api/types';
 
 const BINANCE_STREAM_BASE_URL = 'wss://stream.binance.com:9443/stream?streams=';
+export const BINANCE_STREAM_FLUSH_INTERVAL_MS = 125;
 
 type BinanceStreamPayload = {
   stream?: unknown;
@@ -55,19 +56,9 @@ export function useBinanceTickerStream(
   const lastPricesRef = useRef(new Map<string, string>());
   const lastTimestampsRef = useRef(new Map<string, number>());
   const queuedUpdatesRef = useRef(new Map<string, LiveTickerUpdate>());
-  const frameRef = useRef<number | null>(null);
-  const streamPath = useMemo(() => {
-    const symbols = Array.from(
-      new Set(
-        (markets ?? []).flatMap((market) => {
-          const header = market.price_header;
-          return header?.price_display_state === 'live' && header.symbol ? [header.symbol.toLowerCase()] : [];
-        })
-      )
-    ).sort();
-
-    return symbols.flatMap((symbol) => [`${symbol}@trade`, `${symbol}@aggTrade`, `${symbol}@ticker`]).join('/');
-  }, [markets]);
+  const flushTimerRef = useRef<number | null>(null);
+  const lastFlushRef = useRef(0);
+  const streamPath = useMemo(() => buildBinanceStreamPath(markets), [markets]);
 
   useEffect(() => {
     if (!streamPath) {
@@ -76,11 +67,27 @@ export function useBinanceTickerStream(
 
     onStatusChange?.('connecting');
     function flushQueuedUpdates() {
-      frameRef.current = null;
-      const updates = [...queuedUpdatesRef.current.values()];
-      queuedUpdatesRef.current.clear();
+      flushTimerRef.current = null;
+      lastFlushRef.current = performance.now();
+      const updates = flushLatestUpdates(queuedUpdatesRef.current);
       for (const update of updates) {
         onUpdate(update);
+      }
+    }
+
+    function scheduleFlush() {
+      const waitMs = nextBufferedFlushDelay(performance.now(), lastFlushRef.current);
+      if (waitMs === 0) {
+        if (flushTimerRef.current !== null) {
+          window.clearTimeout(flushTimerRef.current);
+          flushTimerRef.current = null;
+        }
+        flushQueuedUpdates();
+        return;
+      }
+
+      if (flushTimerRef.current === null) {
+        flushTimerRef.current = window.setTimeout(flushQueuedUpdates, waitMs);
       }
     }
 
@@ -99,22 +106,51 @@ export function useBinanceTickerStream(
         }
         lastTimestampsRef.current.set(update.symbol, update.ts);
         lastPricesRef.current.set(update.symbol, update.currentPrice);
-        queuedUpdatesRef.current.set(update.symbol, update);
-        if (frameRef.current === null) {
-          frameRef.current = window.requestAnimationFrame(flushQueuedUpdates);
-        }
+        queueLatestUpdate(queuedUpdatesRef.current, update);
+        scheduleFlush();
       }
     };
 
     return () => {
       socket.close();
-      if (frameRef.current !== null) {
-        window.cancelAnimationFrame(frameRef.current);
-        frameRef.current = null;
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
       }
       queuedUpdatesRef.current.clear();
     };
   }, [onStatusChange, onUpdate, streamPath]);
+}
+
+export function buildBinanceStreamPath(markets: Market[] | null | undefined) {
+  const symbols = Array.from(
+    new Set(
+      (markets ?? []).flatMap((market) => {
+        const header = market.price_header;
+        return header?.price_display_state === 'live' && header.symbol ? [header.symbol.toLowerCase()] : [];
+      })
+    )
+  ).sort();
+
+  return symbols.map((symbol) => `${symbol}@aggTrade`).join('/');
+}
+
+export function nextBufferedFlushDelay(
+  nowMs: number,
+  lastFlushMs: number,
+  intervalMs = BINANCE_STREAM_FLUSH_INTERVAL_MS
+) {
+  return Math.max(intervalMs - (nowMs - lastFlushMs), 0);
+}
+
+export function queueLatestUpdate(queue: Map<string, LiveTickerUpdate>, update: LiveTickerUpdate) {
+  queue.set(update.symbol, update);
+}
+
+export function flushLatestUpdates(queue: Map<string, LiveTickerUpdate>) {
+  const updates = [...queue.values()];
+  queue.clear();
+  return updates;
 }
 
 function readSymbol(rawMessage: string) {

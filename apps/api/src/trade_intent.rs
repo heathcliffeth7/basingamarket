@@ -439,7 +439,20 @@ async fn prepare_buy(
         "Devnet market config initialize edilmemis.",
     )
     .await?;
-    let round_state = fetch_round(&state.chain_config, &round).await?;
+    let round_state = match fetch_round(&state.chain_config, &round).await {
+        Ok(round_state) => round_state,
+        Err(error) if error.code == "round_not_initialized" => {
+            crate::devnet_round_bootstrap::enqueue_current_round_if_live(
+                state,
+                market_id,
+                round_id,
+                Utc::now().timestamp(),
+            )
+            .await;
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
     validate_round_tradeable(&round_state)?;
 
     let curve = match input.side {
@@ -730,7 +743,7 @@ async fn fetch_round(config: &SolanaDevnetConfig, address: &str) -> Result<Round
         config,
         address,
         "round_not_initialized",
-        "Devnet round initialize edilmemis.",
+        "Devnet round is not initialized.",
     )
     .await?;
     if data.len() < 219 {

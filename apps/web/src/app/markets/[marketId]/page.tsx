@@ -13,6 +13,7 @@ import { mockCurves, mockMarketPriceSeries, mockMarkets, mockRoundHistories } fr
 import { evaluateMarketDelta } from '@/lib/api/realtime';
 import { useBinanceTickerStream } from '@/lib/hooks/useBinanceTickerStream';
 import { buildMarketDetailRouteState } from '@/lib/markets/detailRouteState';
+import { derivePriceLead, type PriceLeadTone } from '@/lib/markets/priceLead';
 import { curveForSelectedRound, priceSeriesForSelectedRound, roundIdForStartAt } from '@/lib/markets/roundDataGuards';
 import { buildMarketRoundSlug, liveMarketRoundHref, parseMarketRouteParam } from '@/lib/markets/routes';
 import { deriveSimpleMarketRead } from '@/lib/utils/signals';
@@ -35,7 +36,19 @@ export default function MarketDetailPage() {
   const [realtimeState, setRealtimeState] = useState<'connecting' | 'live' | 'refetching' | 'offline'>('connecting');
   const [actionPanelOpen, setActionPanelOpen] = useState(false);
   const [selectedOrderBookAsk, setSelectedOrderBookAsk] = useState<SelectedOrderBookAsk | null>(null);
+  const [livePriceLeadTone, setLivePriceLeadTone] = useState<PriceLeadTone>('neutral');
   const livePriceStoreRef = useRef(createLivePriceStore());
+  const livePriceLeadRef = useRef<{
+    symbol: string | null;
+    startAt: number;
+    endAt: number;
+    openPrice: string | null;
+  }>({
+    symbol: null,
+    startAt: 0,
+    endAt: 0,
+    openPrice: null
+  });
   const marketSequenceRef = useRef(0);
   const mockMarket = mockMarkets.find((candidate) => candidate.market_id === marketId) ?? mockMarkets[0];
   const mockCurveData = mockCurves[marketId] ?? mockCurves[mockMarket.market_id] ?? mockCurves['1'];
@@ -186,11 +199,42 @@ export default function MarketDetailPage() {
   const updateLivePrice = useCallback(
     (update: LiveTickerUpdate) => {
       livePriceStoreRef.current.push(update);
+      const leadInput = livePriceLeadRef.current;
+      if (
+        update.symbol !== leadInput.symbol
+        || update.ts < leadInput.startAt
+        || update.ts > leadInput.endAt
+      ) {
+        return;
+      }
+      const nextTone = derivePriceLead(leadInput.openPrice, update.currentPrice).tone;
+      setLivePriceLeadTone((current) => current === nextTone ? current : nextTone);
     },
     []
   );
   useBinanceTickerStream(renderViewingLive && marketForChart ? [marketForChart] : [], updateLivePrice, setRealtimeState);
   const simpleRead = useMemo(() => deriveSimpleMarketRead({ market: marketForChart }), [marketForChart]);
+
+  useEffect(() => {
+    const header = marketForChart?.price_header ?? null;
+    const nextInput = {
+      symbol: header?.symbol ?? null,
+      startAt: header?.start_at ?? 0,
+      endAt: header?.end_at ?? 0,
+      openPrice: header?.open_price ?? null
+    };
+    livePriceLeadRef.current = nextInput;
+    const displayPrice = header?.current_price ?? header?.close_price ?? null;
+    const nextTone = derivePriceLead(nextInput.openPrice, displayPrice).tone;
+    setLivePriceLeadTone((current) => current === nextTone ? current : nextTone);
+  }, [
+    marketForChart?.price_header?.close_price,
+    marketForChart?.price_header?.current_price,
+    marketForChart?.price_header?.end_at,
+    marketForChart?.price_header?.open_price,
+    marketForChart?.price_header?.start_at,
+    marketForChart?.price_header?.symbol
+  ]);
 
   useEffect(() => {
     if (!selectedOrderBookAsk) {
@@ -305,6 +349,7 @@ export default function MarketDetailPage() {
               history={rounds}
               selectedStartAt={selectedStartAt}
               liveStartAt={marketForChart?.price_header?.start_at}
+              liveTone={livePriceLeadTone}
               roundHref={(round) => {
                 const asset = route.asset ?? marketForChart?.price_header?.asset ?? market?.price_header?.asset;
                 const durationSeconds = route.durationSeconds ?? marketForChart?.price_header?.duration_seconds ?? market?.price_header?.duration_seconds;

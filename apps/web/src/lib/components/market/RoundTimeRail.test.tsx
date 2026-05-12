@@ -4,7 +4,7 @@ import { mockRoundHistories } from '@/lib/api/mock';
 import RoundTimeRail from './RoundTimeRail';
 
 describe('RoundTimeRail', () => {
-  it('marks the live round with a pulsing red dot', () => {
+  it('marks the live round with a Polymarket-style pinging tone dot', () => {
     const history = mockRoundHistories['1'];
     const liveStartAt = history.rounds.at(-1)!.start_at;
     const html = renderToStaticMarkup(
@@ -12,12 +12,17 @@ describe('RoundTimeRail', () => {
         history={history}
         selectedStartAt={liveStartAt}
         liveStartAt={liveStartAt}
+        liveTone="up"
         roundHref={(round) => `/markets/btc-updown-5m-${round.start_at}`}
       />
     );
 
     expect(html).toContain('data-testid="live-round-dot"');
-    expect(html).toContain('animate-pulse');
+    expect(html).toContain('data-testid="live-round-dot-ping"');
+    expect(html).toContain('data-tone="up"');
+    expect(html).toContain('bg-market-success');
+    expect(html).toContain('animate-ping');
+    expect(html).not.toContain('animate-pulse');
     expect(html).toContain(`/markets/btc-updown-5m-${liveStartAt}`);
   });
 

@@ -20,6 +20,7 @@ import {
   OrderBookSchema,
   MarketPriceSeriesSchema,
   MarketSchema,
+  ProfileActivitySchema,
   ProfileSchema,
   RoundHistorySchema,
   ShareCardResponseSchema,
@@ -52,6 +53,7 @@ import {
   type MarketCurve,
   type OrderBook,
   type MarketPriceSeries,
+  type ProfileActivity,
   type Profile,
   type RoundHistory,
   type ShareCardResponse,
@@ -73,6 +75,7 @@ import {
   mockMarkets,
   mockOrderBooks,
   mockProfile,
+  mockProfileActivity,
   mockRoundHistories,
   mockShareCard,
   mockShareRender,
@@ -83,8 +86,8 @@ import { z } from 'zod';
 
 const MarketsSchema = z.array(MarketSchema);
 const TicketsSchema = z.array(TicketSchema);
-export const DEVNET_ROUND_RETRY_ATTEMPTS = 8;
-export const DEVNET_ROUND_RETRY_DELAY_MS = 2_000;
+export const DEVNET_ROUND_RETRY_ATTEMPTS = 30;
+export const DEVNET_ROUND_RETRY_DELAY_MS = 500;
 
 type ApiClientErrorInput = {
   status: number;
@@ -615,6 +618,13 @@ export const api = {
     );
   },
 
+  getProfileActivity(address: string): Promise<ProfileActivity> {
+    return withMockFallback(
+      () => requestJson(`/profiles/${address}/activity`, ProfileActivitySchema),
+      () => mockProfileActivity(address)
+    );
+  },
+
   getCashBalance(address: string): Promise<CashBalance> {
     return requestJson(`/profiles/${address}/cash`, CashBalanceSchema);
   },
@@ -734,6 +744,16 @@ export const api = {
 };
 
 export function normalizeBuyIntentError(error: unknown, path: string) {
+  if (error instanceof ApiClientError && error.code === 'opening_batch_active') {
+    return new ApiClientError({
+      status: error.status,
+      code: 'opening_batch_active',
+      message: 'Devnet round is opening. Retry in a moment.',
+      requestId: error.requestId,
+      path
+    });
+  }
+
   if (!(error instanceof ApiClientError) || error.status !== 404) return error;
 
   const buyIntentMessages: Record<string, { code: string; message: string }> = {
@@ -779,7 +799,8 @@ export function normalizeBuyIntentError(error: unknown, path: string) {
 }
 
 export function isTransientDevnetRoundError(error: unknown): error is ApiClientError {
-  return error instanceof ApiClientError && error.code === 'round_not_initialized';
+  return error instanceof ApiClientError
+    && (error.code === 'round_not_initialized' || error.code === 'opening_batch_active');
 }
 
 export function marketWebSocketUrl(marketId: string) {

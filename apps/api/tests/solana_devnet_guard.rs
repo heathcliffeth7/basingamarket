@@ -6,6 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use basingamarket_api::{build_router, AppState};
 use basingamarket_chain::{decode_solana_pubkey, SolanaDevnetConfig};
 use basingamarket_db::{CashBalanceRow, InMemoryProjectionStore};
+use basingamarket_domain::crypto_rounds::current_round_id;
 use basingamarket_realtime::MemoryEventBus;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -157,31 +158,69 @@ fn rpc_missing_account() -> Value {
 }
 
 async fn post_buy_intent(rpc_url: String) -> (StatusCode, Value) {
-    let response = build_router(
-        app_state().with_chain_config(ready_cash_chain_config_with_program_rpc(rpc_url)),
-    )
-    .oneshot(
-        Request::builder()
-            .method("POST")
-            .uri("/rounds/5928300/buy-intent")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                json!({
-                    "buyer_wallet": TEST_SOLANA_PUBKEY,
-                    "side": "UP",
-                    "usdc_in": "1000000",
-                    "market_id": 1
-                })
-                .to_string(),
-            ))
-            .unwrap(),
-    )
-    .await
-    .unwrap();
+    let state = app_state().with_chain_config(ready_cash_chain_config_with_program_rpc(rpc_url));
+    post_buy_intent_on_state(&state, current_5m_round_id()).await
+}
+
+async fn post_buy_intent_on_state(state: &AppState, round_id: u64) -> (StatusCode, Value) {
+    let response = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/rounds/{round_id}/buy-intent"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "buyer_wallet": TEST_SOLANA_PUBKEY,
+                        "side": "UP",
+                        "usdc_in": "1000000",
+                        "market_id": 1
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body).unwrap();
     (status, json)
+}
+
+async fn get_bootstrap_requests(state: &AppState) -> Value {
+    let response = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/_devnet/round-bootstrap-requests")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&body).unwrap()
+}
+
+async fn delete_bootstrap_request(state: &AppState, market_id: u64, round_id: u64) -> StatusCode {
+    build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/_devnet/round-bootstrap-requests/{market_id}/{round_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+fn current_5m_round_id() -> u64 {
+    current_round_id(chrono::Utc::now().timestamp(), 300).unwrap()
 }
 
 #[tokio::test]
@@ -293,10 +332,19 @@ async fn cash_buy_route_is_registered_and_requires_auth() {
 #[tokio::test]
 async fn buy_intent_missing_program_account_returns_json_404() {
     let rpc_url = spawn_rpc_sequence(vec![rpc_missing_account()]).await;
-    let (status, json) = post_buy_intent(rpc_url).await;
+    let state = app_state().with_chain_config(ready_cash_chain_config_with_program_rpc(rpc_url));
+    let (status, json) = post_buy_intent_on_state(&state, current_5m_round_id()).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["code"], "program_not_deployed");
+    assert_eq!(
+        get_bootstrap_requests(&state)
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -324,6 +372,7 @@ async fn buy_intent_missing_market_account_returns_json_404() {
 
 #[tokio::test]
 async fn buy_intent_missing_devnet_round_account_returns_json_404() {
+    let round_id = current_5m_round_id();
     let rpc_url = spawn_rpc_sequence(vec![
         rpc_existing_account(),
         rpc_account_data(encoded_global_config_account()),
@@ -331,10 +380,46 @@ async fn buy_intent_missing_devnet_round_account_returns_json_404() {
         rpc_missing_account(),
     ])
     .await;
-    let (status, json) = post_buy_intent(rpc_url).await;
+    let state = app_state().with_chain_config(ready_cash_chain_config_with_program_rpc(rpc_url));
+    let (status, json) = post_buy_intent_on_state(&state, round_id).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["code"], "round_not_initialized");
+    let requests = get_bootstrap_requests(&state).await;
+    assert_eq!(requests.as_array().unwrap().len(), 1);
+    assert_eq!(requests[0]["market_id"], "1");
+    assert_eq!(requests[0]["round_id"], round_id.to_string());
+    assert_eq!(requests[0]["asset"], "BTC");
+    assert_eq!(requests[0]["duration_seconds"], 300);
+    assert_eq!(requests[0]["interval"], "5m");
+}
+
+#[tokio::test]
+async fn devnet_round_bootstrap_request_delete_clears_pending_request() {
+    let round_id = current_5m_round_id();
+    let rpc_url = spawn_rpc_sequence(vec![
+        rpc_existing_account(),
+        rpc_account_data(encoded_global_config_account()),
+        rpc_existing_account(),
+        rpc_missing_account(),
+    ])
+    .await;
+    let state = app_state().with_chain_config(ready_cash_chain_config_with_program_rpc(rpc_url));
+    let (status, _) = post_buy_intent_on_state(&state, round_id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    assert_eq!(
+        delete_bootstrap_request(&state, 1, round_id).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        get_bootstrap_requests(&state)
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -370,10 +455,12 @@ async fn buy_intent_returns_quote_after_batch() {
     assert_eq!(json["quote"]["side"], "UP");
     assert_eq!(json["quote"]["usdc_in"], "1000000");
     assert_eq!(json["quote"]["fee_usdc"], "0");
-    assert!(json["quote"]["tickets_out"]
-        .as_str()
-        .and_then(|value| value.parse::<u64>().ok())
-        .is_some_and(|value| value > 0));
+    assert!(
+        json["quote"]["tickets_out"]
+            .as_str()
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(|value| value > 0)
+    );
     let fresh_price_after = json["quote"]["fresh_price_after"]
         .as_str()
         .and_then(|value| value.parse::<u64>().ok())
@@ -412,9 +499,11 @@ async fn deposit_config_reports_ready_when_cash_env_is_complete() {
         "So11111111111111111111111111111111111111112"
     );
     assert_eq!(json["status"], "ready");
-    assert!(json["vault_token_account"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        json["vault_token_account"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 }
 
 #[tokio::test]
@@ -579,12 +668,16 @@ async fn transfer_deposit_quote_returns_reference_for_ready_usdc_config() {
     assert_eq!(json["cash_amount"], "1000000");
     assert_eq!(json["transfer_amount"], "1000000");
     assert_eq!(json["status"], "ready");
-    assert!(json["reference"]
-        .as_str()
-        .is_some_and(|value| value.starts_with("bm:")));
-    assert!(json["destination"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        json["reference"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("bm:"))
+    );
+    assert!(
+        json["destination"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 }
 
 #[tokio::test]

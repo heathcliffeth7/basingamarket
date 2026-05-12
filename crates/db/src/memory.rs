@@ -10,6 +10,8 @@ use uuid::Uuid;
 use crate::rows::{projected_at, *};
 use crate::withdrawals::{CashWithdrawalQuoteRow, CashWithdrawalRow};
 
+mod profile_activity_reads;
+
 #[derive(Debug, Default)]
 pub(crate) struct ProjectionState {
     pub(crate) raw_event_keys: HashSet<RawEventKey>,
@@ -131,19 +133,6 @@ impl InMemoryProjectionStore {
             .tickets
             .values()
             .filter(|ticket| ticket.market_id == market_id)
-            .cloned()
-            .collect()
-    }
-
-    pub async fn get_tickets_for_profile(&self, wallet_address: &str) -> Vec<TicketRow> {
-        self.state
-            .read()
-            .await
-            .tickets
-            .values()
-            .filter(|ticket| {
-                ticket.current_owner == wallet_address || ticket.original_caller == wallet_address
-            })
             .cloned()
             .collect()
     }
