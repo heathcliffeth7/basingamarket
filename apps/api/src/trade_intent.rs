@@ -21,7 +21,8 @@ use uuid::Uuid;
 
 use crate::{
     deposits::{self, ResolvedDepositConfig},
-    require_privy_session, ApiError, AppState,
+    wallet_sessions::require_wallet_owner,
+    ApiError, AppState,
 };
 
 const SCALE: u64 = 1_000_000;
@@ -203,7 +204,9 @@ pub(crate) async fn execute_cash_buy(
     Path(round_id): Path<u64>,
     Json(input): Json<BuyIntentRequest>,
 ) -> Result<Json<CashBuyResponse>, ApiError> {
-    let _claims = require_privy_session(&state, &headers)?;
+    let buyer_wallet = normalize_base58_pubkey(&input.buyer_wallet, "buyer_wallet")
+        .map_err(|_| ApiError::bad_request("invalid_buyer_wallet", "Buyer wallet gecersiz."))?;
+    require_wallet_owner(&state, &headers, &buyer_wallet)?;
     execute_cash_buy_inner(&state, round_id, input)
         .await
         .map(Json)
@@ -215,9 +218,9 @@ pub(crate) async fn execute_market_buy(
     Path(round_id): Path<u64>,
     Json(input): Json<BuyIntentRequest>,
 ) -> Result<Json<MarketBuyResponse>, ApiError> {
-    let _claims = require_privy_session(&state, &headers)?;
     let buyer_wallet = normalize_base58_pubkey(&input.buyer_wallet, "buyer_wallet")
         .map_err(|_| ApiError::bad_request("invalid_buyer_wallet", "Buyer wallet gecersiz."))?;
+    require_wallet_owner(&state, &headers, &buyer_wallet)?;
     let usdc_in = parse_positive_u64(&input.usdc_in)?;
     let market_id = input.market_id.unwrap_or(DEFAULT_MARKET_ID);
     crate::secondary_resale::ensure_round_live(&state, market_id, round_id).await?;

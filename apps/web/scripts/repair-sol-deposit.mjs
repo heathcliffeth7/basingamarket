@@ -20,11 +20,19 @@ async function main() {
   const rpcUrl = args.rpc ?? process.env.SOLANA_RPC_URL ?? env.SOLANA_RPC_URL ?? DEFAULT_RPC_URL;
   const apiBaseUrl = args['api-base-url'] ?? process.env.API_BASE_URL ?? DEFAULT_API_BASE_URL;
   const treasury = args.treasury ?? process.env.SOLANA_SOL_TREASURY ?? env.SOLANA_SOL_TREASURY;
+  const accessToken = args['access-token'] ?? process.env.PRIVY_ACCESS_TOKEN ?? env.PRIVY_ACCESS_TOKEN;
+  const walletSessionToken = args['wallet-session-token'] ?? process.env.BM_WALLET_SESSION_TOKEN ?? env.BM_WALLET_SESSION_TOKEN;
   const signature = args.signature ?? await findSignature({ rpcUrl, wallet, treasury });
+  if (!accessToken) throw new Error('Missing --access-token or PRIVY_ACCESS_TOKEN');
+  if (!walletSessionToken) throw new Error('Missing --wallet-session-token or BM_WALLET_SESSION_TOKEN');
 
   const response = await fetch(`${apiBaseUrl}/profiles/${wallet}/sol-deposit-repairs`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'authorization': `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+      'x-bm-wallet-session': walletSessionToken
+    },
     body: JSON.stringify({ signature, cash_amount: cashAmount })
   });
   const body = await response.json().catch(() => null);

@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf, process::Command};
 
 use axum::{
     extract::{Path, State},
+    http::HeaderMap,
     Json,
 };
 use basingamarket_auth::normalize_solana_pubkey;
@@ -14,7 +15,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{deposits::ResolvedDepositConfig, ApiError, AppState};
+use crate::{
+    deposits::ResolvedDepositConfig, wallet_sessions::require_wallet_owner, ApiError, AppState,
+};
 
 const DEFAULT_WITHDRAW_KEYPAIR: &str = "~/.config/solana/basingamarket-devnet-vault-owner.json";
 const DEFAULT_WITHDRAW_TTL_SECONDS: i64 = 60;
@@ -48,11 +51,13 @@ pub(crate) async fn get_latest_withdrawal(
 
 pub(crate) async fn create_withdrawal_quote(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(address): Path<String>,
     Json(payload): Json<WithdrawalQuoteRequest>,
 ) -> Result<Json<WithdrawalQuoteResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address gecersiz."))?;
+    require_wallet_owner(&state, &headers, &wallet_address)?;
     let config = resolve_withdraw_config(&state)?;
     let cash_amount = parse_cash_amount(&payload.cash_amount)?;
     let cash_balance = state
@@ -121,11 +126,13 @@ pub(crate) async fn create_withdrawal_quote(
 
 pub(crate) async fn verify_withdrawal(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(address): Path<String>,
     Json(payload): Json<WithdrawalRequest>,
 ) -> Result<Json<WithdrawalResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address gecersiz."))?;
+    require_wallet_owner(&state, &headers, &wallet_address)?;
     let config = resolve_withdraw_config(&state)?;
     let user_signature = payload.user_signature.trim().to_owned();
     if !is_valid_solana_signature(&user_signature) {

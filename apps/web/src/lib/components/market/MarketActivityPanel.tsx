@@ -8,6 +8,7 @@ import { ApiClientError, api } from '@/lib/api/client';
 import { cashBalanceQueryKey } from '@/lib/api/cashBalanceQuery';
 import type { BidBook, CashBid, MarketCurve, Ticket } from '@/lib/api/types';
 import { useAuth } from '@/lib/auth/privy';
+import { useWalletSession } from '@/lib/auth/walletSession';
 import { cn } from '@/lib/utils/cn';
 import { formatTokenAmount, formatUsdPrice } from '@/lib/utils/amount';
 import Badge from '@/lib/components/ui/Badge';
@@ -28,12 +29,12 @@ export default function MarketActivityPanel({
 }) {
   const queryClient = useQueryClient();
   const {
-    getAccessToken,
     loginSolana,
     walletAddress,
     solanaWalletsReady,
     solanaWalletResolving
   } = useAuth();
+  const { getWalletSession } = useWalletSession();
   const walletConnectPending = !walletAddress && (solanaWalletResolving || !solanaWalletsReady);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [lastSignature, setLastSignature] = useState<string | null>(null);
@@ -68,13 +69,13 @@ export default function MarketActivityPanel({
     mutationFn: async (bid: CashBid) => {
       if (!roundId) throw new Error('Round is not ready.');
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       return api.cancelBid({
         roundId,
         bidId: bid.bid_id,
         buyerWallet: walletAddress,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {
@@ -88,14 +89,14 @@ export default function MarketActivityPanel({
     mutationFn: async (ticket: Ticket) => {
       if (!roundId) throw new Error('Round is not ready.');
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       return api.cancelListing({
         ticketId: ticket.ticket_id,
         sellerWallet: walletAddress,
         marketId,
         roundId,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {
@@ -108,12 +109,12 @@ export default function MarketActivityPanel({
   const claimTicketMutation = useMutation({
     mutationFn: async (ticket: Ticket) => {
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       return api.claimTicket({
         ticketId: ticket.ticket_id,
         claimerWallet: walletAddress,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {

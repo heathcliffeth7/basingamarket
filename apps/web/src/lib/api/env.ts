@@ -30,6 +30,7 @@ export const solanaCluster = process.env.NEXT_PUBLIC_SOLANA_CLUSTER || 'devnet';
 export const solanaRpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 export const solanaWsUrl = process.env.NEXT_PUBLIC_SOLANA_WS_URL || 'wss://api.devnet.solana.com';
 export const solanaProgramId = process.env.NEXT_PUBLIC_SOLANA_PROGRAM_ID || '';
+export const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || '';
 
 assertMockFallbackAllowed(process.env.NODE_ENV === 'production', isMockFallbackEnabled);
 assertSolanaDevnetAllowed(solanaCluster);

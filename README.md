@@ -71,8 +71,13 @@ Install the web dependencies first:
 
 ```bash
 cd apps/web
-npm install
+npm --version # must be 11.14.1 or newer
+npm run setup
 ```
+
+The web package pins npm 11 and blocks install-time lifecycle scripts by default.
+`npm run setup` installs from the lockfile with those protections, then runs the
+repo-owned Privy patch explicitly.
 
 Start the local full stack from the web package:
 

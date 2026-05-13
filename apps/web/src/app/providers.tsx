@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth/privy';
+import { ExternalWalletProvider } from '@/lib/wallet/ExternalWalletContext';
 
 export default function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -20,7 +21,9 @@ export default function Providers({ children }: { children: ReactNode }) {
 
   return (
     <AuthProvider>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <ExternalWalletProvider>
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      </ExternalWalletProvider>
     </AuthProvider>
   );
 }

@@ -8,6 +8,7 @@ import { cashBalanceQueryKey, cashBalanceQueryOptions } from '@/lib/api/cashBala
 import type { CashBid, Market, MarketCurve, MarketPriceSeries, Ticket } from '@/lib/api/types';
 import type { SimpleMarketRead } from '@/lib/utils/signals';
 import { useAuth } from '@/lib/auth/privy';
+import { useWalletSession } from '@/lib/auth/walletSession';
 import { cn } from '@/lib/utils/cn';
 import { formatTokenAmount, formatUsdPrice, parseTokenAmountToBaseUnits } from '@/lib/utils/amount';
 import Badge from '@/lib/components/ui/Badge';
@@ -45,12 +46,12 @@ export default function MarketActionPanel({
 }) {
   const queryClient = useQueryClient();
   const {
-    getAccessToken,
     loginSolana,
     solanaWalletAddress,
     solanaWalletsReady,
     solanaWalletResolving
   } = useAuth();
+  const { getWalletSession } = useWalletSession();
   const [selectedSide, setSelectedSide] = useState<TradeSide>(selectedOrderBookAsk?.side ?? 'UP');
   const [amount, setAmount] = useState('1');
   const [activeTradeTab, setActiveTradeTab] = useState<'buy' | 'sell'>('buy');
@@ -86,7 +87,8 @@ export default function MarketActionPanel({
     ? BigInt(cashBalanceBaseUnits) >= BigInt(selectedOrderBookAsk.total_usdc)
     : false;
   const selectedSideData = selectedSide === 'UP' ? upSide : downSide;
-  const outcome = buildClosedRoundOutcome({ market, priceSeries, selectedStartAt, viewingLive });
+  const nowTs = useHydrationSafeNowTs(marketSnapshotNowTs(market, priceSeries, selectedStartAt));
+  const outcome = buildClosedRoundOutcome({ market, priceSeries, selectedStartAt, viewingLive, nowTs });
   const curveLeader = curve?.sides.length
     ? [...curve.sides].sort((a, b) => Number(BigInt(b.market_cap) - BigInt(a.market_cap)))[0]
     : null;
@@ -165,8 +167,7 @@ export default function MarketActionPanel({
       if (!amountBaseUnits) throw new Error('Enter a valid BUSDC amount.');
       if (!canBuy) throw new Error('This round is closed for fresh entries.');
       if (!hasEnoughCash) throw new Error('BUSDC balance is too low.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
 
       const result = await api.executeMarketBuy({
         roundId: curve.round_id,
@@ -174,7 +175,8 @@ export default function MarketActionPanel({
         buyerWallet: walletAddress,
         side: selectedSide,
         usdcIn: amountBaseUnits,
-        accessToken,
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken,
         onRoundRetry: () => setStatusMessage('Preparing devnet round...')
       });
       return result;
@@ -203,15 +205,15 @@ export default function MarketActionPanel({
       if (!marketId || !roundId) throw new Error('Round is not ready.');
       const pricePerTicket = parseTokenAmountToBaseUnits(listingPrice);
       if (!pricePerTicket) throw new Error('Enter a valid listing price.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       return api.listTicket({
         ticketId: ticket.ticket_id,
         sellerWallet: walletAddress,
         pricePerTicket,
         marketId,
         roundId,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {
@@ -226,14 +228,14 @@ export default function MarketActionPanel({
       if (!curve) throw new Error('Curve is not loaded yet.');
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
       if (!marketId || !roundId) throw new Error('Round is not ready.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       return api.instantSell({
         ticketId: ticket.ticket_id,
         sellerWallet: walletAddress,
         marketId,
         roundId,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {
@@ -248,14 +250,14 @@ export default function MarketActionPanel({
       if (!curve) throw new Error('Curve is not loaded yet.');
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
       if (!marketId || !roundId) throw new Error('Round is not ready.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       return api.cancelListing({
         ticketId: ticket.ticket_id,
         sellerWallet: walletAddress,
         marketId,
         roundId,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {
@@ -273,8 +275,7 @@ export default function MarketActionPanel({
       const pricePerTicket = parseTokenAmountToBaseUnits(bidPrice);
       const maxUsdc = parseTokenAmountToBaseUnits(bidMax);
       if (!pricePerTicket || !maxUsdc) throw new Error('Enter a valid bid.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       return api.createBid({
         roundId,
         marketId,
@@ -282,7 +283,8 @@ export default function MarketActionPanel({
         side: bidSide,
         pricePerTicket,
         maxUsdc,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {
@@ -302,15 +304,15 @@ export default function MarketActionPanel({
       if (!marketId || !roundId) throw new Error('Round is not ready.');
       if (!tradingReady) throw new Error('This round is closed for trading.');
       if (!hasEnoughSelectedAskCash) throw new Error('BUSDC balance is too low.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       const result = await api.buyListing({
         ticketId: ask.lot_id,
         buyerWallet: walletAddress,
         maxPricePerTicket: ask.price_per_ticket,
         marketId,
         roundId,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
       return { ask, result };
     },
@@ -325,12 +327,12 @@ export default function MarketActionPanel({
   const claimTicketMutation = useMutation({
     mutationFn: async (ticket: Ticket) => {
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(walletAddress);
       return api.claimTicket({
         ticketId: ticket.ticket_id,
         claimerWallet: walletAddress,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {
@@ -630,6 +632,7 @@ export default function MarketActionPanel({
                   <input
                     className="mt-1 h-10 w-full rounded-lg border border-terminal-line bg-terminal-panel-strong px-3 font-mono text-sm font-bold text-terminal-text outline-none focus:border-market-positive"
                     inputMode="decimal"
+                    suppressHydrationWarning
                     value={amount}
                     onChange={(event) => setAmount(event.target.value)}
                   />
@@ -719,11 +722,11 @@ export default function MarketActionPanel({
                   <div className="mt-2 grid grid-cols-2 gap-2">
                     <label className="block">
                       <span className="text-xs font-bold text-terminal-muted">Limit price</span>
-                      <input className="mt-1 h-9 w-full rounded-lg border border-terminal-line bg-terminal-panel-strong px-2 font-mono text-xs font-bold text-terminal-text outline-none" inputMode="decimal" value={bidPrice} onChange={(event) => setBidPrice(event.target.value)} />
+                      <input className="mt-1 h-9 w-full rounded-lg border border-terminal-line bg-terminal-panel-strong px-2 font-mono text-xs font-bold text-terminal-text outline-none" inputMode="decimal" suppressHydrationWarning value={bidPrice} onChange={(event) => setBidPrice(event.target.value)} />
                     </label>
                     <label className="block">
                       <span className="text-xs font-bold text-terminal-muted">Max BUSDC</span>
-                      <input className="mt-1 h-9 w-full rounded-lg border border-terminal-line bg-terminal-panel-strong px-2 font-mono text-xs font-bold text-terminal-text outline-none" inputMode="decimal" value={bidMax} onChange={(event) => setBidMax(event.target.value)} />
+                      <input className="mt-1 h-9 w-full rounded-lg border border-terminal-line bg-terminal-panel-strong px-2 font-mono text-xs font-bold text-terminal-text outline-none" inputMode="decimal" suppressHydrationWarning value={bidMax} onChange={(event) => setBidMax(event.target.value)} />
                     </label>
                   </div>
                   <Button
@@ -842,6 +845,7 @@ export default function MarketActionPanel({
                     <input
                       className="mt-1 h-9 w-full rounded-lg border border-terminal-line bg-terminal-panel-strong px-3 font-mono text-sm font-bold text-terminal-text outline-none focus:border-market-positive"
                       inputMode="decimal"
+                      suppressHydrationWarning
                       value={listingPrice}
                       onChange={(event) => setListingPrice(event.target.value)}
                     />
@@ -901,6 +905,31 @@ function sideFromTicket(ticket: Ticket): TradeSide {
 
 function canClaimTicket(ticket: Ticket) {
   return !ticket.claimed && (ticket.status === 'won' || ticket.status === 'refundable');
+}
+
+function marketSnapshotNowTs(
+  market: Market | null | undefined,
+  priceSeries: MarketPriceSeries | null | undefined,
+  selectedStartAt: number | undefined
+) {
+  return priceSeries?.start_at ?? selectedStartAt ?? market?.price_header?.start_at ?? 0;
+}
+
+function currentUnixSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function useHydrationSafeNowTs(fallbackNowTs: number) {
+  const [nowTs, setNowTs] = useState(fallbackNowTs);
+
+  useEffect(() => {
+    const syncNow = () => setNowTs(currentUnixSeconds());
+    syncNow();
+    const timer = window.setInterval(syncNow, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return nowTs;
 }
 
 function replaceCachedTicket(current: Ticket[] | undefined, ticket: Ticket) {

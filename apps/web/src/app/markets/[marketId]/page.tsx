@@ -7,8 +7,8 @@ import { BadgeDollarSign } from 'lucide-react';
 import { api, marketWebSocketUrl } from '@/lib/api/client';
 import { isMockFallbackEnabled } from '@/lib/api/env';
 import { createLivePriceStore } from '@/lib/api/livePriceStore';
-import type { LiveTickerUpdate } from '@/lib/api/livePrices';
-import type { Market, MarketCurve } from '@/lib/api/types';
+import { applyLiveTickerPriceToSeries, type LiveTickerUpdate } from '@/lib/api/livePrices';
+import type { Market, MarketCurve, MarketPriceSeries } from '@/lib/api/types';
 import { mockCurves, mockMarketPriceSeries, mockMarkets, mockRoundHistories } from '@/lib/api/mock';
 import { evaluateMarketDelta } from '@/lib/api/realtime';
 import { useBinanceTickerStream } from '@/lib/hooks/useBinanceTickerStream';
@@ -42,11 +42,13 @@ export default function MarketDetailPage() {
     symbol: string | null;
     startAt: number;
     endAt: number;
+    durationSeconds: number;
     openPrice: string | null;
   }>({
     symbol: null,
     startAt: 0,
     endAt: 0,
+    durationSeconds: 300,
     openPrice: null
   });
   const marketSequenceRef = useRef(0);
@@ -111,9 +113,10 @@ export default function MarketDetailPage() {
   }, [switcherCurveMarkets, switcherCurveQueries]);
   const selectedDurationSeconds = route.durationSeconds ?? market?.price_header?.duration_seconds ?? mockMarket.price_header?.duration_seconds ?? 300;
   const selectedStartAt = route.startAt ?? market?.price_header?.start_at ?? mockMarket.price_header?.start_at;
+  const nowMs = useHydrationSafeNowMs(marketSnapshotNowMs(route, market, selectedStartAt));
   const detailRouteState = useMemo(
-    () => buildMarketDetailRouteState({ route, market, selectedStartAt }),
-    [market, route, selectedStartAt]
+    () => buildMarketDetailRouteState({ route, market, selectedStartAt, nowMs }),
+    [market, nowMs, route, selectedStartAt]
   );
   const usingOptimisticLiveMarket = detailRouteState.usingOptimisticLiveMarket;
   const marketForChart = detailRouteState.marketForChart;
@@ -188,7 +191,7 @@ export default function MarketDetailPage() {
   });
   const rawPriceSeries = priceSeriesQuery.data ?? (isMockFallbackEnabled ? mockPriceSeriesData : null);
   const priceSeries = priceSeriesForSelectedRound(rawPriceSeries, selectedStartAt);
-  const liveMarketHref = marketForChart ? liveMarketRoundHref(marketForChart) : market ? liveMarketRoundHref(market) : `/markets/${marketId}`;
+  const liveMarketHref = marketForChart ? liveMarketRoundHref(marketForChart, nowMs) : market ? liveMarketRoundHref(market, nowMs) : `/markets/${marketId}`;
   const handleGoLiveMarketClick = useCallback(() => {
     queryClient.removeQueries({ queryKey: ['market', marketId], exact: true });
     queryClient.removeQueries({ queryKey: ['market-curve', marketId] });
@@ -207,10 +210,19 @@ export default function MarketDetailPage() {
       ) {
         return;
       }
+      queryClient.setQueryData<MarketPriceSeries | undefined>(
+        ['market-price-series', marketId, update.symbol, leadInput.startAt],
+        (series) => applyLiveTickerPriceToSeries(series, update, leadInput.startAt, {
+          startAt: leadInput.startAt,
+          endAt: leadInput.endAt,
+          durationSeconds: leadInput.durationSeconds,
+          openPrice: leadInput.openPrice
+        })
+      );
       const nextTone = derivePriceLead(leadInput.openPrice, update.currentPrice).tone;
       setLivePriceLeadTone((current) => current === nextTone ? current : nextTone);
     },
-    []
+    [marketId, queryClient]
   );
   useBinanceTickerStream(renderViewingLive && marketForChart ? [marketForChart] : [], updateLivePrice, setRealtimeState);
   const simpleRead = useMemo(() => deriveSimpleMarketRead({ market: marketForChart }), [marketForChart]);
@@ -221,6 +233,7 @@ export default function MarketDetailPage() {
       symbol: header?.symbol ?? null,
       startAt: header?.start_at ?? 0,
       endAt: header?.end_at ?? 0,
+      durationSeconds: header?.duration_seconds ?? selectedDurationSeconds,
       openPrice: header?.open_price ?? null
     };
     livePriceLeadRef.current = nextInput;
@@ -230,10 +243,12 @@ export default function MarketDetailPage() {
   }, [
     marketForChart?.price_header?.close_price,
     marketForChart?.price_header?.current_price,
+    marketForChart?.price_header?.duration_seconds,
     marketForChart?.price_header?.end_at,
     marketForChart?.price_header?.open_price,
     marketForChart?.price_header?.start_at,
-    marketForChart?.price_header?.symbol
+    marketForChart?.price_header?.symbol,
+    selectedDurationSeconds
   ]);
 
   useEffect(() => {
@@ -422,4 +437,26 @@ function isSwitcherMarket(market: Market) {
       && (header.asset === 'BTC' || header.asset === 'ETH' || header.asset === 'SOL')
       && (header.duration_seconds === 60 || header.duration_seconds === 300)
   );
+}
+
+function marketSnapshotNowMs(
+  route: ReturnType<typeof parseMarketRouteParam>,
+  market: Market | null | undefined,
+  selectedStartAt: number | undefined
+) {
+  const snapshotStartAt = market?.price_header?.start_at ?? selectedStartAt ?? route.startAt ?? 0;
+  return snapshotStartAt * 1000;
+}
+
+function useHydrationSafeNowMs(fallbackNowMs: number) {
+  const [nowMs, setNowMs] = useState(fallbackNowMs);
+
+  useEffect(() => {
+    const syncNow = () => setNowMs(Date.now());
+    syncNow();
+    const timer = window.setInterval(syncNow, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return nowMs;
 }

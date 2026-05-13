@@ -70,20 +70,21 @@ describe('AppShell header cash and deposit controls', () => {
   it('uses Privy and Solana wallet copy for login notices', () => {
     const notice = authNoticeCopy(null, 'opening');
 
-    expect(notice.title).toBe('Solana cüzdanı ile giriş');
-    expect(notice.message).toContain('Privy cüzdan modalı');
-    expect(notice.message).toContain('OKX');
+    expect(notice.title).toBe('Giriş ve cüzdan bağlantısı');
+    expect(notice.message).toContain('Privy modalı');
+    expect(notice.message).toContain('Google');
+    expect(notice.message).toContain('Solana cüzdanını ayrıca bağlayabilirsin');
     expect(notice.message).not.toContain('Phantom');
   });
 
-  it('separates wallet loading, API offline, pending, and ready cash states', () => {
+  it('separates missing wallet, API offline, pending, and ready cash states', () => {
     expect(
       headerCashDisplayValue({
         isAuthenticated: true,
         walletAddress: null,
         cashQuery: { isFetching: false, isLoading: false }
       })
-    ).toBe('Wallet bağlanıyor');
+    ).toBe('Connect wallet');
 
     expect(
       headerCashDisplayValue({
@@ -187,18 +188,20 @@ describe('AppShell header cash and deposit controls', () => {
     await withdrawRender.cleanup();
   });
 
-  it('uses a single login control when no wallet address is available', () => {
+  it('uses a single connect-wallet control when an authenticated user has no wallet address', () => {
     const html = renderToStaticMarkup(
       <AuthenticatedHeaderControls
-        cashValue="Wallet bağlanıyor"
+        cashValue="Connect wallet"
         walletAddress={null}
         onLogin={() => undefined}
         mintNode={<button type="button" aria-label="Mint BUSDC">Mint BUSDC</button>}
       />
     );
 
-    expect(html).toContain('aria-label="Login"');
-    expect(html).toContain('Login');
+    expect(html).toContain('aria-label="Connect wallet"');
+    expect(html).toContain('Connect wallet');
+    expect(html).not.toContain('Wallet bağlanıyor');
+    expect(html).not.toContain('aria-label="Login"');
     expect(html).not.toContain('Sign up');
     expect(html).not.toContain('aria-label="Switch wallet"');
   });

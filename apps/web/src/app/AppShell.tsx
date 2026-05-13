@@ -35,7 +35,7 @@ export function headerCashDisplayValue({
   cashQuery: HeaderCashQueryLike;
 }) {
   if (!isAuthenticated) return '';
-  if (!walletAddress) return 'Wallet bağlanıyor';
+  if (!walletAddress) return 'Connect wallet';
   return cashDisplayValue(cashQuery);
 }
 
@@ -47,9 +47,9 @@ export function authNoticeCopy(authError: SolanaAuthError | null | undefined, di
     };
   }
   return {
-    title: 'Solana cüzdanı ile giriş',
+    title: 'Giriş ve cüzdan bağlantısı',
     message: directSolanaLoginStatus === 'opening'
-      ? 'Privy cüzdan modalı açılıyor. OKX kullanıyorsan OKX içinde Solana hesabını seçip bağlantı isteğini onayla.'
+      ? 'Privy modalı açılıyor. Google ile giriş yapabilir veya trade için Solana cüzdanını ayrıca bağlayabilirsin.'
       : 'Privy oturumu doğrulanıyor.'
   };
 }
@@ -120,7 +120,11 @@ export function AuthenticatedHeaderControls({
           withdrawNode={withdrawNode}
         />
       ) : (
-        <WalletLoginControl compact={compact} disabled={switchWalletDisabled || !onLogin} onLogin={onLogin} />
+        <>
+          <DepositButton walletAddress={null} />
+          <WithdrawButton walletAddress={null} />
+          <WalletLoginControl compact={compact} disabled={switchWalletDisabled || !onLogin} label="Connect wallet" onLogin={onLogin} />
+        </>
       )}
     </>
   );
@@ -338,21 +342,23 @@ function WalletAccountMenu({
 function WalletLoginControl({
   compact,
   disabled,
+  label = 'Login',
   onLogin
 }: {
   compact: boolean;
   disabled: boolean;
+  label?: string;
   onLogin?: () => void;
 }) {
   return (
     <Button
-      aria-label="Login"
+      aria-label={label}
       className={compact ? 'h-8 px-3 text-xs' : 'h-9 px-4 text-sm'}
       disabled={disabled}
       onClick={onLogin}
       variant="secondary"
     >
-      Login
+      {label}
     </Button>
   );
 }
@@ -391,7 +397,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <label className="relative hidden min-w-[260px] max-w-[700px] flex-1 md:block">
             <span className="sr-only">Global market search</span>
             <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-terminal-muted" size={18} />
-            <input className="h-11 w-full rounded-xl border border-terminal-line bg-terminal-panel px-11 text-sm text-terminal-text placeholder:text-terminal-muted focus:border-market-positive" placeholder="Search markets..." />
+            <input className="h-11 w-full rounded-xl border border-terminal-line bg-terminal-panel px-11 text-sm text-terminal-text placeholder:text-terminal-muted focus:border-market-positive" placeholder="Search markets..." suppressHydrationWarning />
           </label>
 
           <div className="ml-auto hidden items-center gap-3 lg:flex">

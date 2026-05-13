@@ -19,6 +19,7 @@ type BinanceKlineResponse = {
 };
 
 const PRICE_DECIMALS = 6;
+const LIVE_PRICE_SERIES_MAX_POINTS = 360;
 
 export type LiveTickerUpdate = {
   symbol: string;
@@ -27,6 +28,13 @@ export type LiveTickerUpdate = {
   ts: number;
   direction: 'up' | 'down' | 'flat';
   fetchedAt: string;
+};
+
+type LivePriceSeriesSeed = {
+  startAt: number;
+  endAt: number;
+  durationSeconds: number;
+  openPrice: string | null;
 };
 
 export function decimalPriceToScaledString(price: string) {
@@ -184,26 +192,35 @@ export function applyLiveTickerPriceToMarket(market: Market, update: LiveTickerU
 export function applyLiveTickerPriceToSeries(
   series: MarketPriceSeries | undefined,
   update: LiveTickerUpdate,
-  liveStartAt: number | undefined
+  liveStartAt: number | undefined,
+  seed?: LivePriceSeriesSeed
 ) {
-  if (!series || series.symbol !== update.symbol || series.status !== 'live' || series.start_at !== liveStartAt) {
+  const activeSeries = series ?? seedLivePriceSeries(update, liveStartAt, seed);
+
+  if (!activeSeries || activeSeries.symbol !== update.symbol || activeSeries.status !== 'live' || activeSeries.start_at !== liveStartAt) {
     return series;
   }
 
-  const lastPoint = series.points.at(-1);
-  if (lastPoint && update.ts < lastPoint.ts) {
-    return series;
+  const nextTs = Math.min(Math.max(Math.floor(update.ts), activeSeries.start_at), activeSeries.end_at);
+  const lastPoint = activeSeries.points.at(-1);
+  if (lastPoint && nextTs < lastPoint.ts) {
+    return activeSeries;
   }
 
   const nextPoint = {
-    ts: Math.min(Math.max(update.ts, series.start_at), series.end_at),
+    ts: nextTs,
     price: update.currentPrice
   };
-  const previousPoints = series.points.filter((point) => point.ts < nextPoint.ts);
-  const mergedPoints = [...previousPoints, nextPoint].slice(-240);
+  const basePoints = activeSeries.points.length > 0
+    ? activeSeries.points
+    : activeSeries.open_price
+      ? [{ ts: activeSeries.start_at, price: activeSeries.open_price }]
+      : [];
+  const previousPoints = basePoints.filter((point) => point.ts < nextPoint.ts);
+  const mergedPoints = [...previousPoints, nextPoint].slice(-LIVE_PRICE_SERIES_MAX_POINTS);
 
   return {
-    ...series,
+    ...activeSeries,
     current_price: update.currentPrice,
     points: mergedPoints.length > 0 ? mergedPoints : [nextPoint]
   };
@@ -211,4 +228,26 @@ export function applyLiveTickerPriceToSeries(
 
 export function applyLiveTickerPriceToMarkets(markets: Market[] | undefined, update: LiveTickerUpdate) {
   return markets?.map((market) => applyLiveTickerPriceToMarket(market, update));
+}
+
+function seedLivePriceSeries(
+  update: LiveTickerUpdate,
+  liveStartAt: number | undefined,
+  seed: LivePriceSeriesSeed | undefined
+): MarketPriceSeries | undefined {
+  if (!seed || liveStartAt === undefined || seed.startAt !== liveStartAt) {
+    return undefined;
+  }
+
+  return {
+    symbol: update.symbol,
+    start_at: seed.startAt,
+    end_at: seed.endAt,
+    duration_seconds: seed.durationSeconds,
+    status: 'live',
+    open_price: seed.openPrice,
+    current_price: null,
+    close_price: null,
+    points: seed.openPrice ? [{ ts: seed.startAt, price: seed.openPrice }] : []
+  };
 }

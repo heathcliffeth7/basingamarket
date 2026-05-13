@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Coins, Loader2 } from 'lucide-react';
 import { ApiClientError, api } from '@/lib/api/client';
 import { cashBalanceQueryKey } from '@/lib/api/cashBalanceQuery';
-import { useAuth } from '@/lib/auth/privy';
+import { useWalletSession } from '@/lib/auth/walletSession';
 import { cn } from '@/lib/utils/cn';
 import { formatTokenAmount } from '@/lib/utils/amount';
 
@@ -23,7 +23,7 @@ export function busdcMintInvalidationKeys(walletAddress: string) {
 
 export default function BusdcMintButton({ walletAddress, compact = false }: BusdcMintButtonProps) {
   const queryClient = useQueryClient();
-  const { getAccessToken } = useAuth();
+  const { getWalletSession } = useWalletSession();
   const statusQuery = useQuery({
     queryKey: busdcMintStatusQueryKey(walletAddress),
     queryFn: () => api.getBusdcMintStatus(walletAddress),
@@ -31,8 +31,8 @@ export default function BusdcMintButton({ walletAddress, compact = false }: Busd
   });
   const mutation = useMutation({
     mutationFn: async () => {
-      const accessToken = await getAccessToken();
-      return api.mintBusdc(walletAddress, accessToken);
+      const walletSession = await getWalletSession(walletAddress);
+      return api.mintBusdc(walletAddress, walletSession.accessToken, walletSession.walletSessionToken);
     },
     onSuccess: () => {
       busdcMintInvalidationKeys(walletAddress).forEach((queryKey) => {

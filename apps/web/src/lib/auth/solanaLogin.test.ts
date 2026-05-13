@@ -6,6 +6,8 @@ import {
   resolveStickySolanaWallet,
   solanaWalletAddressFromPrivyAccount,
   solanaConnectWalletOptions,
+  solanaEmbeddedWalletCreateOnLogin,
+  solanaLoginMethodsAndOrder,
   solanaLoginModalOptions,
   solanaWalletList,
   solanaWalletConnectorOptions
@@ -21,9 +23,32 @@ describe('solana auth helpers', () => {
 
   it('opens the Privy login modal in Solana wallet-only mode', () => {
     expect(solanaLoginModalOptions).toEqual({
-      loginMethods: ['wallet'],
       walletChainType: 'solana-only'
     });
+  });
+
+  it('orders email first, Google second, then explicit Solana wallets', () => {
+    expect(solanaLoginMethodsAndOrder.primary).toEqual([
+      'email',
+      'google',
+      'phantom',
+      'okx_wallet'
+    ]);
+    expect(solanaLoginMethodsAndOrder.overflow).toEqual([
+      'solflare',
+      'backpack',
+      'jupiter',
+      'wallet_connect_qr_solana'
+    ]);
+    expect([
+      ...solanaLoginMethodsAndOrder.primary,
+      ...(solanaLoginMethodsAndOrder.overflow ?? [])
+    ]).not.toContain('detected_solana_wallets');
+  });
+
+  it('keeps Google login available without auto-creating embedded Solana wallets', () => {
+    expect(solanaLoginMethodsAndOrder.primary).toContain('google');
+    expect(solanaEmbeddedWalletCreateOnLogin).toBe('off');
   });
 
   it('includes OKX in the Solana wallet modal list', () => {
@@ -74,7 +99,25 @@ describe('solana auth helpers', () => {
     })).toBeNull();
   });
 
-  it('selects and sticks to the current Solana wallet address', () => {
+  it('selects and sticks to an explicit identity Solana wallet address', () => {
+    const wallet = { address: PHANTOM_WALLET };
+
+    const state = resolveStickySolanaWallet({
+      authenticated: true,
+      wallets: [wallet],
+      walletsReady: true,
+      identityAddress: PHANTOM_WALLET,
+      previousAddress: null
+    });
+
+    expect(state.wallet).toBe(wallet);
+    expect(state.address).toBe(wallet.address);
+    expect(state.hasSolanaWallet).toBe(true);
+    expect(state.resolving).toBe(false);
+    expect(state.nextStickyAddress).toBe(wallet.address);
+  });
+
+  it('does not promote a newly detected external wallet without an identity address', () => {
     const wallet = { address: PHANTOM_WALLET };
 
     const state = resolveStickySolanaWallet({
@@ -84,11 +127,29 @@ describe('solana auth helpers', () => {
       previousAddress: null
     });
 
-    expect(state.wallet).toBe(wallet);
-    expect(state.address).toBe(wallet.address);
-    expect(state.hasSolanaWallet).toBe(true);
+    expect(state.wallet).toBeNull();
+    expect(state.address).toBeNull();
+    expect(state.hasSolanaWallet).toBe(false);
     expect(state.resolving).toBe(false);
-    expect(state.nextStickyAddress).toBe(wallet.address);
+    expect(state.nextStickyAddress).toBeNull();
+  });
+
+  it('keeps the identity wallet when a different external wallet connects', () => {
+    const externalWallet = { address: PHANTOM_WALLET };
+
+    const state = resolveStickySolanaWallet({
+      authenticated: true,
+      wallets: [externalWallet],
+      walletsReady: true,
+      identityAddress: OKX_WALLET,
+      previousAddress: null
+    });
+
+    expect(state.wallet).toBeNull();
+    expect(state.address).toBe(OKX_WALLET);
+    expect(state.hasSolanaWallet).toBe(true);
+    expect(state.resolving).toBe(true);
+    expect(state.nextStickyAddress).toBe(OKX_WALLET);
   });
 
   it('keeps the previous Solana wallet address during transient empty wallet state', () => {
@@ -106,6 +167,24 @@ describe('solana auth helpers', () => {
     expect(state.nextStickyAddress).toBe(PHANTOM_WALLET);
   });
 
+  it('prefers the current user identity address over an older sticky address', () => {
+    const identityWallet = { address: OKX_WALLET };
+
+    const state = resolveStickySolanaWallet({
+      authenticated: true,
+      wallets: [identityWallet],
+      walletsReady: true,
+      identityAddress: OKX_WALLET,
+      previousAddress: PHANTOM_WALLET
+    });
+
+    expect(state.wallet).toBe(identityWallet);
+    expect(state.address).toBe(OKX_WALLET);
+    expect(state.hasSolanaWallet).toBe(true);
+    expect(state.resolving).toBe(false);
+    expect(state.nextStickyAddress).toBe(OKX_WALLET);
+  });
+
   it('prefers the latest confirmed Solana wallet over an older sticky address', () => {
     const phantomWallet = { address: PHANTOM_WALLET };
     const okxWallet = { address: OKX_WALLET };
@@ -115,6 +194,7 @@ describe('solana auth helpers', () => {
       wallets: [phantomWallet, okxWallet],
       walletsReady: true,
       preferredAddress: OKX_WALLET,
+      identityAddress: PHANTOM_WALLET,
       previousAddress: PHANTOM_WALLET
     });
 
@@ -133,6 +213,7 @@ describe('solana auth helpers', () => {
       wallets: [phantomWallet],
       walletsReady: true,
       preferredAddress: OKX_WALLET,
+      identityAddress: PHANTOM_WALLET,
       previousAddress: PHANTOM_WALLET
     });
 

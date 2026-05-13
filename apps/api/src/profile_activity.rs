@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use axum::{
-    Json,
     extract::{Path, State},
+    Json,
 };
 use basingamarket_auth::normalize_solana_pubkey;
 use basingamarket_db::{CashResaleRow, CashTradeRow, MarketRow, PayoutClaimRow, TicketRow};
@@ -12,9 +12,9 @@ use serde_json::Value;
 use tokio::task::JoinSet;
 
 use crate::{
-    ApiError, AppState, MarketPriceHeaderResponse, TicketResponse,
     ensure_phase_one_protocol_markets, public_ticket_status,
     round_settlement::settle_market_round_if_ready, ticket_cost_basis_usdc, ticket_token_amount,
+    ApiError, AppState, MarketPriceHeaderResponse, TicketResponse,
 };
 
 #[derive(Debug, Serialize)]
@@ -431,5 +431,9 @@ fn signed_amount_string(value: i128) -> String {
 }
 
 fn side_from_outcome(outcome_id: u8) -> &'static str {
-    if outcome_id == 1 { "DOWN" } else { "UP" }
+    if outcome_id == 1 {
+        "DOWN"
+    } else {
+        "UP"
+    }
 }

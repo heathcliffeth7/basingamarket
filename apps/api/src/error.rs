@@ -38,6 +38,22 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn unauthorized_with_code(code: &'static str, message: &'static str) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code,
+            message,
+        }
+    }
+
+    pub(crate) fn forbidden(code: &'static str, message: &'static str) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+            message,
+        }
+    }
+
     pub(crate) fn auth_not_configured() -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,

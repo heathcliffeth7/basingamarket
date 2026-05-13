@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    Json,
     extract::{Path, State},
+    Json,
 };
 use basingamarket_auth::normalize_solana_pubkey;
 use basingamarket_db::TicketRow;
@@ -10,8 +10,8 @@ use serde_json::Value;
 use tokio::task::JoinSet;
 
 use crate::{
-    ApiError, AppState, TicketResponse, ensure_phase_one_protocol_markets,
-    round_settlement::settle_market_round_if_ready,
+    ensure_phase_one_protocol_markets, round_settlement::settle_market_round_if_ready, ApiError,
+    AppState, TicketResponse,
 };
 
 pub(crate) async fn get_profile_tickets(

@@ -1,7 +1,7 @@
 import type { InputHTMLAttributes } from 'react';
 import { cn } from '@/lib/utils/cn';
 
-export default function Input({ className, type = 'text', ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+export default function Input({ className, type = 'text', suppressHydrationWarning = true, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       className={cn(
@@ -9,6 +9,7 @@ export default function Input({ className, type = 'text', ...rest }: InputHTMLAt
         className
       )}
       type={type}
+      suppressHydrationWarning={suppressHydrationWarning}
       {...rest}
     />
   );

@@ -605,7 +605,7 @@ function buildPriceModel(
     ? hasSeries ? series.close_price ?? series.current_price ?? null : headerClosePrice ?? headerCurrentPrice
     : livePriceOverride ?? headerCurrentPrice ?? (hasSeries ? series.current_price ?? series.close_price ?? null : null);
   const points = viewingLive && !closed
-    ? normalizeInitialLivePoints(series?.points ?? [], startAt, openPrice, displayPrice)
+    ? normalizeInitialLivePoints(series?.points ?? [], startAt, openPrice)
     : normalizePoints(series?.points ?? [], startAt, endAt, openPrice, displayPrice, closed, nowTs);
 
   return {
@@ -686,18 +686,13 @@ function useThrottledLivePrice(
 function normalizeInitialLivePoints(
   points: MarketPricePoint[],
   startAt: number,
-  openPrice: string | null,
-  displayPrice: string | null
+  openPrice: string | null
 ) {
   if (points.length > 0) {
     return points;
   }
 
-  const base = [
-    ...(openPrice ? [{ ts: startAt, price: openPrice }] : []),
-    ...(displayPrice ? [{ ts: startAt + 1, price: displayPrice }] : [])
-  ];
-  return base.length > 0 ? base : [];
+  return openPrice ? [{ ts: startAt, price: openPrice }] : [];
 }
 
 function normalizePoints(

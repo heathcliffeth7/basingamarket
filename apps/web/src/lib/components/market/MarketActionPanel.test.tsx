@@ -23,6 +23,12 @@ const authState = vi.hoisted(() => ({
   solanaWalletResolving: false,
   hasSolanaWallet: true
 }));
+const walletSessionMock = vi.hoisted(() => ({
+  getWalletSession: vi.fn(async () => ({
+    accessToken: 'privy-access-token',
+    walletSessionToken: 'wallet-session-token'
+  }))
+}));
 
 const selectedAsk: SelectedOrderBookAsk = {
   side: 'UP',
@@ -34,6 +40,10 @@ const selectedAsk: SelectedOrderBookAsk = {
 
 vi.mock('@/lib/auth/privy', () => ({
   useAuth: () => authState
+}));
+
+vi.mock('@/lib/auth/walletSession', () => ({
+  useWalletSession: () => walletSessionMock
 }));
 
 function renderPanel(viewingLive: boolean, curveOverride?: MarketCurve | null) {
@@ -253,7 +263,8 @@ describe('MarketActionPanel', () => {
         maxPricePerTicket: selectedAsk.price_per_ticket,
         marketId: mockCurves[liveMarket().market_id].market_id,
         roundId: mockCurves[liveMarket().market_id].round_id,
-        accessToken: 'privy-access-token'
+        accessToken: 'privy-access-token',
+        walletSessionToken: 'wallet-session-token'
       });
     });
     expect(clearSelectedAsk).toHaveBeenCalled();
@@ -356,7 +367,8 @@ describe('MarketActionPanel', () => {
         pricePerTicket: '1200000',
         marketId: curve.market_id,
         roundId: curve.round_id,
-        accessToken: 'privy-access-token'
+        accessToken: 'privy-access-token',
+        walletSessionToken: 'wallet-session-token'
       });
     });
   });
@@ -429,7 +441,8 @@ describe('MarketActionPanel', () => {
       expect(claimTicketSpy).toHaveBeenCalledWith({
         ticketId: ticket.ticket_id,
         claimerWallet: authState.solanaWalletAddress,
-        accessToken: 'privy-access-token'
+        accessToken: 'privy-access-token',
+        walletSessionToken: 'wallet-session-token'
       });
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-tickets', market.market_id, curve.round_id] });

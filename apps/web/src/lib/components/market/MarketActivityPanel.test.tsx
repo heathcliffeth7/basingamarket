@@ -27,6 +27,12 @@ const authMock = vi.hoisted(() => ({
   solanaWalletResolving: false,
   hasSolanaWallet: true
 }));
+const walletSessionMock = vi.hoisted(() => ({
+  getWalletSession: vi.fn(async () => ({
+    accessToken: 'privy-access-token',
+    walletSessionToken: 'wallet-session-token'
+  }))
+}));
 
 const MockApiClientError = vi.hoisted(() => class MockApiClientError extends Error {});
 
@@ -37,6 +43,10 @@ vi.mock('@/lib/api/client', () => ({
 
 vi.mock('@/lib/auth/privy', () => ({
   useAuth: () => authMock
+}));
+
+vi.mock('@/lib/auth/walletSession', () => ({
+  useWalletSession: () => walletSessionMock
 }));
 
 const WALLET = mockWalletAddress;
@@ -258,7 +268,8 @@ describe('MarketActivityPanel', () => {
       roundId: ROUND_ID,
       bidId: 'bid-owned',
       buyerWallet: WALLET,
-      accessToken: 'privy-access-token'
+      accessToken: 'privy-access-token',
+      walletSessionToken: 'wallet-session-token'
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['round-bids', ROUND_ID, MARKET_ID] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['round-orderbook', ROUND_ID, MARKET_ID] });
@@ -284,7 +295,8 @@ describe('MarketActivityPanel', () => {
       sellerWallet: WALLET,
       marketId: MARKET_ID,
       roundId: ROUND_ID,
-      accessToken: 'privy-access-token'
+      accessToken: 'privy-access-token',
+      walletSessionToken: 'wallet-session-token'
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-curve', MARKET_ID] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market', MARKET_ID] });
@@ -329,7 +341,8 @@ describe('MarketActivityPanel', () => {
     expect(apiMock.claimTicket).toHaveBeenCalledWith({
       ticketId: 'won-position',
       claimerWallet: WALLET,
-      accessToken: 'privy-access-token'
+      accessToken: 'privy-access-token',
+      walletSessionToken: 'wallet-session-token'
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-tickets', MARKET_ID, ROUND_ID] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['ticket', 'won-position'] });

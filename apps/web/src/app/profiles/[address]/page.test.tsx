@@ -15,6 +15,12 @@ const authState = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   solanaWalletAddress: 'EDo26t5QFmn7yEXQzKftxX5raiFaPwNx2YzkTuRQUVxV' as string | null
 }));
+const walletSessionMock = vi.hoisted(() => ({
+  getWalletSession: vi.fn(async () => ({
+    accessToken: 'privy-access-token',
+    walletSessionToken: 'wallet-session-token'
+  }))
+}));
 
 const apiMock = vi.hoisted(() => ({
   getProfile: vi.fn(),
@@ -37,6 +43,10 @@ vi.mock('next/link', () => ({
 
 vi.mock('@/lib/auth/privy', () => ({
   useAuth: () => authState
+}));
+
+vi.mock('@/lib/auth/walletSession', () => ({
+  useWalletSession: () => walletSessionMock
 }));
 
 vi.mock('@/lib/api/client', () => ({
@@ -139,7 +149,8 @@ describe('ProfilePage claim activity', () => {
       expect(api.claimTicket).toHaveBeenCalledWith({
         ticketId: refundableTicket.ticket_id,
         claimerWallet: owner,
-        accessToken: 'privy-access-token'
+        accessToken: 'privy-access-token',
+        walletSessionToken: 'wallet-session-token'
       });
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profile-positions', owner] });

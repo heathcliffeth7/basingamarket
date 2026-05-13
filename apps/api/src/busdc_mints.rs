@@ -13,7 +13,8 @@ use tokio::{process::Command, time::timeout};
 use uuid::Uuid;
 
 use crate::{
-    deposits::ResolvedDepositConfig, require_privy_session, ApiError, AppState, BusdcReserveBacker,
+    deposits::ResolvedDepositConfig, wallet_sessions::require_wallet_owner, ApiError, AppState,
+    BusdcReserveBacker,
 };
 
 const BUSDC_CURRENCY: &str = "BUSDC";
@@ -48,9 +49,9 @@ pub(crate) async fn mint_busdc(
     Path(address): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<BusdcMintResponse>, ApiError> {
-    let _session = require_privy_session(&state, &headers)?;
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address gecersiz."))?;
+    require_wallet_owner(&state, &headers, &wallet_address)?;
     let now = Utc::now();
     let window = mint_window(now);
     let used_before = state

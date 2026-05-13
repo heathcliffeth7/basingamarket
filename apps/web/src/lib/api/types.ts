@@ -380,6 +380,19 @@ export const BusdcMintSchema = z.object({
   status: z.literal('credited')
 });
 
+export const WalletChallengeSchema = z.object({
+  challenge_id: z.string(),
+  wallet_address: z.string(),
+  message: z.string(),
+  expires_at: z.string()
+});
+
+export const WalletSessionSchema = z.object({
+  wallet_session_token: z.string(),
+  wallet_address: z.string(),
+  expires_at: z.string()
+});
+
 export const DepositConfigSchema = z.object({
   cluster: z.literal('devnet'),
   currency: z.literal('BUSDC'),
@@ -583,6 +596,8 @@ export type Profile = z.infer<typeof ProfileSchema>;
 export type CashBalance = z.infer<typeof CashBalanceSchema>;
 export type BusdcMintStatus = z.infer<typeof BusdcMintStatusSchema>;
 export type BusdcMint = z.infer<typeof BusdcMintSchema>;
+export type WalletChallenge = z.infer<typeof WalletChallengeSchema>;
+export type WalletSession = z.infer<typeof WalletSessionSchema>;
 export type DepositConfig = z.infer<typeof DepositConfigSchema>;
 export type DepositLiquidity = z.infer<typeof DepositLiquiditySchema>;
 export type DepositVerification = z.infer<typeof DepositVerificationSchema>;

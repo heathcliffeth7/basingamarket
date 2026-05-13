@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, State},
+    http::HeaderMap,
     Json,
 };
 use basingamarket_auth::normalize_solana_pubkey;
@@ -9,12 +10,13 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{deposits, ApiError, AppState};
+use crate::{deposits, wallet_sessions::require_wallet_owner, ApiError, AppState};
 
 const BUSDC_CURRENCY: &str = "BUSDC";
 
 pub(crate) async fn repair_sol_deposit(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(address): Path<String>,
     Json(payload): Json<SolDepositRepairRequest>,
 ) -> Result<Json<SolDepositRepairResponse>, ApiError> {
@@ -27,6 +29,7 @@ pub(crate) async fn repair_sol_deposit(
 
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
+    require_wallet_owner(&state, &headers, &wallet_address)?;
     let signature = payload.signature.trim().to_owned();
     if !is_valid_solana_signature(&signature) {
         return Err(ApiError::bad_request(

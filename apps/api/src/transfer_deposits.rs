@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, State},
+    http::HeaderMap,
     Json,
 };
 use basingamarket_auth::normalize_solana_pubkey;
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{deposits, ApiError, AppState};
+use crate::{deposits, wallet_sessions::require_wallet_owner, ApiError, AppState};
 
 const MEMO_PROGRAM_ADDRESS: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 const LEGACY_MEMO_PROGRAM_ADDRESS: &str = "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo";
@@ -42,11 +43,13 @@ fn public_transfer_asset(asset: &str) -> String {
 
 pub(crate) async fn create_transfer_deposit_quote(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(address): Path<String>,
     Json(payload): Json<TransferDepositQuoteRequest>,
 ) -> Result<Json<TransferDepositQuoteResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
+    require_wallet_owner(&state, &headers, &wallet_address)?;
     let cash_amount = parse_cash_amount(&payload.cash_amount)?;
 
     match payload.asset {
@@ -57,11 +60,13 @@ pub(crate) async fn create_transfer_deposit_quote(
 
 pub(crate) async fn verify_transfer_deposit(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(address): Path<String>,
     Json(payload): Json<TransferDepositRequest>,
 ) -> Result<Json<TransferDepositVerificationResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
+    require_wallet_owner(&state, &headers, &wallet_address)?;
     let signature = payload.signature.trim().to_owned();
     if !is_valid_solana_signature(&signature) {
         return Err(ApiError::bad_request(
@@ -106,9 +111,24 @@ pub(crate) async fn verify_transfer_deposit(
         ));
     }
 
+    let client = deposits::rpc_client(&state)?;
+    let payload_quote_id = payload
+        .quote_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|quote_id| !quote_id.is_empty());
+    let (quote_id, transaction) = if let Some(quote_id) = payload_quote_id {
+        (quote_id.to_owned(), None)
+    } else {
+        let transaction =
+            deposits::fetch_solana_transaction(&client, &state.chain_config, &signature).await?;
+        let quote_id = transfer_deposit_quote_id_from_transaction(&transaction)?;
+        (quote_id, Some(transaction))
+    };
+
     let quote = state
         .store
-        .get_transfer_deposit_quote(payload.quote_id.trim())
+        .get_transfer_deposit_quote(&quote_id)
         .await
         .ok_or_else(|| {
             ApiError::bad_request("transfer_deposit_quote_not_found", "Quote not found.")
@@ -132,9 +152,12 @@ pub(crate) async fn verify_transfer_deposit(
         ));
     }
 
-    let client = deposits::rpc_client(&state)?;
-    let transaction =
-        deposits::fetch_solana_transaction(&client, &state.chain_config, &signature).await?;
+    let transaction = match transaction {
+        Some(transaction) => transaction,
+        None => {
+            deposits::fetch_solana_transaction(&client, &state.chain_config, &signature).await?
+        }
+    };
     let slot = match quote.asset.as_str() {
         "BUSDC" | "USDC" => {
             let config = deposits::ResolvedDepositConfig::from_chain_config(&state.chain_config)?;
@@ -523,6 +546,24 @@ fn has_reference_memo(transaction: &Value, reference: &str) -> bool {
         })
 }
 
+fn transfer_deposit_quote_id_from_transaction(transaction: &Value) -> Result<String, ApiError> {
+    deposits::parsed_instructions(transaction)
+        .iter()
+        .filter(|instruction| is_memo_instruction(instruction))
+        .filter_map(|instruction| memo_text(instruction))
+        .find_map(|memo| {
+            memo.strip_prefix("bm:")
+                .filter(|quote_id| !quote_id.is_empty())
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "transfer_deposit_reference_missing",
+                "Transfer memo/reference is missing or invalid.",
+            )
+        })
+}
+
 fn is_memo_instruction(instruction: &Value) -> bool {
     instruction
         .get("programId")
@@ -556,7 +597,7 @@ pub(crate) struct TransferDepositQuoteRequest {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TransferDepositRequest {
-    quote_id: String,
+    quote_id: Option<String>,
     signature: String,
 }
 
@@ -754,6 +795,32 @@ mod tests {
         .unwrap();
 
         assert_eq!(slot, 42);
+    }
+
+    #[test]
+    fn extracts_transfer_quote_id_from_reference_memo() {
+        let quote_id = transfer_deposit_quote_id_from_transaction(&busdc_transaction(
+            "bm:quote-1",
+            "2500000",
+            VAULT,
+            MINT,
+        ))
+        .unwrap();
+
+        assert_eq!(quote_id, "quote-1");
+    }
+
+    #[test]
+    fn rejects_signature_only_transfer_without_reference_memo() {
+        let error = transfer_deposit_quote_id_from_transaction(&busdc_transaction(
+            "wrong-reference",
+            "2500000",
+            VAULT,
+            MINT,
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.code, "transfer_deposit_reference_missing");
     }
 
     #[test]

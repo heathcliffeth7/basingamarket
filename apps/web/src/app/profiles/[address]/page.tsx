@@ -7,6 +7,7 @@ import { ArrowLeft, Copy, Loader2, TrendingUp, Wallet } from 'lucide-react';
 import { api } from '@/lib/api/client';
 import { cashBalanceQueryKey } from '@/lib/api/cashBalanceQuery';
 import { useAuth } from '@/lib/auth/privy';
+import { useWalletSession } from '@/lib/auth/walletSession';
 import Button from '@/lib/components/ui/Button';
 import Badge from '@/lib/components/ui/Badge';
 import Skeleton from '@/lib/components/ui/Skeleton';
@@ -17,7 +18,8 @@ export default function ProfilePage() {
   const params = useParams<{ address: string }>();
   const address = params.address;
   const queryClient = useQueryClient();
-  const { getAccessToken, solanaWalletAddress } = useAuth();
+  const { solanaWalletAddress } = useAuth();
+  const { getWalletSession } = useWalletSession();
   const [copied, setCopied] = useState(false);
   const [claimMessage, setClaimMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'positions' | 'activity'>('activity');
@@ -42,12 +44,12 @@ export default function ProfilePage() {
   const claimTicketMutation = useMutation({
     mutationFn: async (ticket: MarketTicket) => {
       if (!solanaWalletAddress) throw new Error('Solana wallet unavailable.');
-      const accessToken = await getAccessToken();
-      if (!accessToken) throw new Error('Login session required.');
+      const walletSession = await getWalletSession(solanaWalletAddress);
       return api.claimTicket({
         ticketId: ticket.ticket_id,
         claimerWallet: solanaWalletAddress,
-        accessToken
+        accessToken: walletSession.accessToken,
+        walletSessionToken: walletSession.walletSessionToken
       });
     },
     onSuccess: (result) => {

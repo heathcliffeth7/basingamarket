@@ -13,11 +13,13 @@ mod metrics;
 mod profile_activity;
 mod profile_tickets;
 mod protocol_markets;
+mod public_format;
 mod round_settlement;
 mod secondary_resale;
 mod sol_deposit_price;
 mod trade_intent;
 mod transfer_deposits;
+mod wallet_sessions;
 mod withdrawals;
 
 use axum::{
@@ -36,7 +38,7 @@ use basingamarket_auth::{
 use basingamarket_chain::{decode_solana_pubkey, derive_program_address, SolanaDevnetConfig};
 use basingamarket_db::{
     CanvasObjectRow, CashBalanceRow, CashTradeRow, EventMeta, InMemoryProjectionStore, MarketRow,
-    OutcomeRow, ShareCardRow, ShareCardStatus, TicketClaimResult, TicketRow,
+    OutcomeRow, ShareCardRow, TicketClaimResult, TicketRow,
 };
 use basingamarket_domain::{
     crypto_rounds::{all_protocol_stream_configs, round_window, MarketStreamConfig},
@@ -53,6 +55,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 pub(crate) use error::ApiError;
+use public_format::{
+    public_canvas_ticket_status, public_share_status, public_ticket_status, short_address,
+};
 use round_settlement::settle_market_round_if_ready;
 pub use sol_deposit_price::SolDepositPriceProvider;
 
@@ -65,6 +70,7 @@ pub struct AppState {
     pub price_provider: MarketPriceProvider,
     pub sol_deposit_price_provider: SolDepositPriceProvider,
     pub chain_config: SolanaDevnetConfig,
+    pub(crate) wallet_challenges: wallet_sessions::WalletChallengeStore,
     pub(crate) busdc_reserve_backer: BusdcReserveBacker,
     pub(crate) devnet_round_bootstrap_requests: devnet_round_bootstrap::DevnetRoundBootstrapQueue,
     projection_store_path: Option<Arc<PathBuf>>,
@@ -89,6 +95,7 @@ impl AppState {
             price_provider: MarketPriceProvider::disabled(),
             sol_deposit_price_provider: SolDepositPriceProvider::binance(),
             chain_config,
+            wallet_challenges: wallet_sessions::WalletChallengeStore::default(),
             busdc_reserve_backer: BusdcReserveBacker::Script,
             devnet_round_bootstrap_requests:
                 devnet_round_bootstrap::DevnetRoundBootstrapQueue::default(),
@@ -250,6 +257,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health/ready", get(health::ready))
         .route("/chain/status", get(chain_status::chain_status))
         .route("/metrics", get(metrics::metrics))
+        .route(
+            "/auth/wallet-challenges",
+            post(wallet_sessions::create_wallet_challenge),
+        )
+        .route(
+            "/auth/wallet-sessions",
+            post(wallet_sessions::create_wallet_session),
+        )
         .route(
             "/_devnet/round-bootstrap-requests",
             get(devnet_round_bootstrap::list_round_bootstrap_requests),
@@ -652,9 +667,9 @@ async fn claim_ticket(
     Path(id): Path<u64>,
     Json(input): Json<ClaimTicketRequest>,
 ) -> Result<Json<ClaimTicketResponse>, ApiError> {
-    let _session = require_privy_session(&state, &headers)?;
     let claimer = normalize_solana_pubkey(&input.claimer_wallet)
         .map_err(|_| ApiError::bad_request("invalid_wallet", "Wallet address gecersiz."))?;
+    wallet_sessions::require_wallet_owner(&state, &headers, &claimer)?;
     let ticket = state
         .store
         .get_ticket(id)
@@ -1447,50 +1462,6 @@ fn public_mood(mood: u8) -> &'static str {
         3 => "euphoric",
         _ => "neutral",
     }
-}
-
-fn public_ticket_status(status: TicketStatus) -> &'static str {
-    match status {
-        TicketStatus::Active => "active",
-        TicketStatus::Listed => "listed",
-        TicketStatus::Claimable => "won",
-        TicketStatus::Refundable => "refundable",
-        TicketStatus::Claimed => "claimed",
-        TicketStatus::Lost | TicketStatus::Cancelled => "lost",
-    }
-}
-
-fn public_canvas_ticket_status(ticket: Option<&TicketRow>, listed: bool) -> &'static str {
-    match ticket.map(|ticket| ticket.status) {
-        Some(TicketStatus::Listed) => "listed",
-        Some(TicketStatus::Claimable) => "won",
-        Some(TicketStatus::Refundable) => "refundable",
-        Some(TicketStatus::Claimed) => "claimed",
-        Some(TicketStatus::Lost | TicketStatus::Cancelled) => "lost",
-        Some(TicketStatus::Active) | None => {
-            if listed {
-                "listed"
-            } else {
-                "active"
-            }
-        }
-    }
-}
-
-fn public_share_status(status: ShareCardStatus) -> &'static str {
-    match status {
-        ShareCardStatus::Pending => "pending",
-        ShareCardStatus::Processing => "rendering",
-        ShareCardStatus::Completed => "ready",
-        ShareCardStatus::Failed => "failed",
-    }
-}
-
-fn short_address(address: &str) -> String {
-    if address.len() <= 12 {
-        return address.to_owned();
-    }
-    format!("{}...{}", &address[..6], &address[address.len() - 4..])
 }
 
 #[cfg(test)]

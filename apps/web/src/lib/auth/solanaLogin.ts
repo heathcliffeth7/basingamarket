@@ -1,4 +1,4 @@
-import type { ConnectWalletModalOptions, LoginModalOptions, WalletListEntry } from '@privy-io/react-auth';
+import type { ConnectWalletModalOptions, LoginModalOptions, PrivyClientConfig, WalletListEntry } from '@privy-io/react-auth';
 import { isSolanaPubkey } from '@/lib/utils/solana';
 
 export type SolanaAuthErrorStep = 'login' | 'link';
@@ -27,8 +27,14 @@ export const solanaWalletList: WalletListEntry[] = [
   'wallet_connect_qr_solana'
 ];
 
+export const solanaLoginMethodsAndOrder = {
+  primary: ['email', 'google', 'phantom', 'okx_wallet'],
+  overflow: ['solflare', 'backpack', 'jupiter', 'wallet_connect_qr_solana']
+} satisfies NonNullable<PrivyClientConfig['loginMethodsAndOrder']>;
+
+export const solanaEmbeddedWalletCreateOnLogin = 'off' satisfies NonNullable<NonNullable<PrivyClientConfig['embeddedWallets']>['solana']>['createOnLogin'];
+
 export const solanaLoginModalOptions: LoginModalOptions = {
-  loginMethods: ['wallet'],
   walletChainType: 'solana-only'
 };
 
@@ -62,6 +68,7 @@ export type StickySolanaWalletInput<TWallet extends { address: string }> = {
   authenticated: boolean;
   wallets: TWallet[];
   walletsReady: boolean;
+  identityAddress?: string | null;
   preferredAddress?: string | null;
   previousAddress: string | null;
 };
@@ -78,6 +85,7 @@ export function resolveStickySolanaWallet<TWallet extends { address: string }>({
   authenticated,
   wallets,
   walletsReady,
+  identityAddress,
   preferredAddress,
   previousAddress
 }: StickySolanaWalletInput<TWallet>): StickySolanaWalletState<TWallet> {
@@ -91,38 +99,20 @@ export function resolveStickySolanaWallet<TWallet extends { address: string }>({
     };
   }
 
-  if (preferredAddress && isSolanaPubkey(preferredAddress)) {
-    const preferredWallet = wallets.find((wallet) => wallet.address === preferredAddress) ?? null;
+  const activeIdentityAddress = [
+    preferredAddress,
+    identityAddress,
+    previousAddress
+  ].find((address): address is string => Boolean(address && isSolanaPubkey(address)));
+
+  if (activeIdentityAddress) {
+    const preferredWallet = wallets.find((wallet) => wallet.address === activeIdentityAddress) ?? null;
     return {
       wallet: preferredWallet,
-      address: preferredAddress,
+      address: activeIdentityAddress,
       hasSolanaWallet: true,
       resolving: !preferredWallet,
-      nextStickyAddress: preferredAddress
-    };
-  }
-
-  const liveWallet = previousAddress
-    ? (wallets.find((wallet) => wallet.address === previousAddress) ?? wallets[0] ?? null)
-    : (wallets[0] ?? null);
-
-  if (liveWallet) {
-    return {
-      wallet: liveWallet,
-      address: liveWallet.address,
-      hasSolanaWallet: true,
-      resolving: false,
-      nextStickyAddress: liveWallet.address
-    };
-  }
-
-  if (previousAddress) {
-    return {
-      wallet: null,
-      address: previousAddress,
-      hasSolanaWallet: true,
-      resolving: true,
-      nextStickyAddress: previousAddress
+      nextStickyAddress: activeIdentityAddress
     };
   }
 

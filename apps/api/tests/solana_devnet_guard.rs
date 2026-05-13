@@ -1,20 +1,53 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{header, Request, StatusCode},
+    Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use basingamarket_api::{build_router, AppState};
-use basingamarket_chain::{decode_solana_pubkey, SolanaDevnetConfig};
+use basingamarket_auth::{PrivyAccessTokenClaims, PrivyAuthConfig};
+use basingamarket_chain::{decode_solana_pubkey, encode_base58_bytes, SolanaDevnetConfig};
 use basingamarket_db::{CashBalanceRow, InMemoryProjectionStore};
 use basingamarket_domain::crypto_rounds::current_round_id;
 use basingamarket_realtime::MemoryEventBus;
+use ed25519_dalek::{Signer, SigningKey as Ed25519SigningKey};
 use http_body_util::BodyExt;
+use jsonwebtoken::{encode, get_current_timestamp, Algorithm, EncodingKey, Header};
+use p256::{
+    ecdsa::SigningKey,
+    elliptic_curve::rand_core::OsRng,
+    pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+};
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
 const TEST_SOLANA_PUBKEY: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const TEST_PROGRAM_ID: &str = "3oAve8qsR5oVtqUcsXtSELBVz5CnJifj4UCvM6AiHa2r";
+const TEST_APP_ID: &str = "test-privy-app";
+
+struct TestEs256Keys {
+    signing_pem: String,
+    verifying_pem: String,
+}
+
+fn test_es256_keys() -> &'static TestEs256Keys {
+    static KEYS: OnceLock<TestEs256Keys> = OnceLock::new();
+    KEYS.get_or_init(|| {
+        let signing_key = SigningKey::random(&mut OsRng);
+        TestEs256Keys {
+            signing_pem: signing_key
+                .to_pkcs8_pem(LineEnding::LF)
+                .unwrap()
+                .to_string(),
+            verifying_pem: signing_key
+                .verifying_key()
+                .to_public_key_pem(LineEnding::LF)
+                .unwrap(),
+        }
+    })
+}
 
 fn app_state() -> AppState {
     AppState::new(
@@ -22,6 +55,95 @@ fn app_state() -> AppState {
         MemoryEventBus::default(),
     )
     .with_auth_config(None)
+}
+
+fn test_auth_config() -> PrivyAuthConfig {
+    PrivyAuthConfig::new(TEST_APP_ID, &test_es256_keys().verifying_pem).unwrap()
+}
+
+fn valid_privy_token() -> String {
+    let now = get_current_timestamp();
+    encode(
+        &Header::new(Algorithm::ES256),
+        &PrivyAccessTokenClaims {
+            aud: TEST_APP_ID.to_owned(),
+            exp: now + 3600,
+            iat: now,
+            iss: "privy.io".to_owned(),
+            sid: "session-1".to_owned(),
+            sub: "did:privy:user-1".to_owned(),
+        },
+        &EncodingKey::from_ec_pem(test_es256_keys().signing_pem.as_bytes()).unwrap(),
+    )
+    .unwrap()
+}
+
+fn wallet_fixture(seed: u8) -> (String, Ed25519SigningKey) {
+    let signing_key = Ed25519SigningKey::from_bytes(&[seed; 32]);
+    let wallet = encode_base58_bytes(signing_key.verifying_key().as_bytes());
+    (wallet, signing_key)
+}
+
+async fn wallet_session_token(
+    app: &Router,
+    wallet: &str,
+    signing_key: &Ed25519SigningKey,
+) -> String {
+    std::env::set_var(
+        "BM_WALLET_SESSION_SECRET",
+        "test-wallet-session-secret-at-least-32-bytes",
+    );
+    let auth_header = format!("Bearer {}", valid_privy_token());
+    let challenge_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/wallet-challenges")
+                .header(header::AUTHORIZATION, &auth_header)
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "wallet_address": wallet }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = challenge_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let challenge: Value = serde_json::from_slice(&body).unwrap();
+    let signature = signing_key.sign(challenge["message"].as_str().unwrap().as_bytes());
+    let signature = encode_base58_bytes(&signature.to_bytes());
+    let session_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/wallet-sessions")
+                .header(header::AUTHORIZATION, &auth_header)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "challenge_id": challenge["challenge_id"],
+                        "wallet_address": wallet,
+                        "signature": signature
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = session_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let session: Value = serde_json::from_slice(&body).unwrap();
+    session["wallet_session_token"].as_str().unwrap().to_owned()
 }
 
 fn ready_cash_chain_config() -> SolanaDevnetConfig {
@@ -455,12 +577,10 @@ async fn buy_intent_returns_quote_after_batch() {
     assert_eq!(json["quote"]["side"], "UP");
     assert_eq!(json["quote"]["usdc_in"], "1000000");
     assert_eq!(json["quote"]["fee_usdc"], "0");
-    assert!(
-        json["quote"]["tickets_out"]
-            .as_str()
-            .and_then(|value| value.parse::<u64>().ok())
-            .is_some_and(|value| value > 0)
-    );
+    assert!(json["quote"]["tickets_out"]
+        .as_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|value| value > 0));
     let fresh_price_after = json["quote"]["fresh_price_after"]
         .as_str()
         .and_then(|value| value.parse::<u64>().ok())
@@ -499,11 +619,9 @@ async fn deposit_config_reports_ready_when_cash_env_is_complete() {
         "So11111111111111111111111111111111111111112"
     );
     assert_eq!(json["status"], "ready");
-    assert!(
-        json["vault_token_account"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["vault_token_account"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
 }
 
 #[tokio::test]
@@ -601,12 +719,24 @@ async fn deposit_liquidity_reports_available_reserve_over_cash_liabilities() {
 
 #[tokio::test]
 async fn sol_deposit_quote_reports_pending_when_sol_config_is_missing() {
-    let response = build_router(app_state().with_chain_config(ready_cash_chain_config()))
+    let (wallet, signing_key) = wallet_fixture(7);
+    let app = build_router(
+        app_state()
+            .with_auth_config(Some(test_auth_config()))
+            .with_chain_config(ready_cash_chain_config()),
+    );
+    let wallet_session = wallet_session_token(&app, &wallet, &signing_key).await;
+    let response = app
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/profiles/{TEST_SOLANA_PUBKEY}/sol-deposit-quote?cash_amount=1000000"
+                    "/profiles/{wallet}/sol-deposit-quote?cash_amount=1000000"
                 ))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", valid_privy_token()),
+                )
+                .header("x-bm-wallet-session", wallet_session)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -615,7 +745,7 @@ async fn sol_deposit_quote_reports_pending_when_sol_config_is_missing() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["wallet_address"], TEST_SOLANA_PUBKEY);
+    assert_eq!(json["wallet_address"], wallet);
     assert_eq!(json["cash_amount"], "1000000");
     assert_eq!(json["status"], "projection_pending");
     assert!(json["quote_id"].is_null());
@@ -623,13 +753,19 @@ async fn sol_deposit_quote_reports_pending_when_sol_config_is_missing() {
 
 #[tokio::test]
 async fn transfer_deposit_quote_reports_pending_when_cash_config_is_missing() {
-    let response = build_router(app_state())
+    let (wallet, signing_key) = wallet_fixture(8);
+    let app = build_router(app_state().with_auth_config(Some(test_auth_config())));
+    let wallet_session = wallet_session_token(&app, &wallet, &signing_key).await;
+    let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!(
-                    "/profiles/{TEST_SOLANA_PUBKEY}/transfer-deposit-quotes"
-                ))
+                .uri(format!("/profiles/{wallet}/transfer-deposit-quotes"))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", valid_privy_token()),
+                )
+                .header("x-bm-wallet-session", wallet_session)
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"asset":"USDC","cash_amount":"1000000"}"#))
                 .unwrap(),
@@ -639,7 +775,7 @@ async fn transfer_deposit_quote_reports_pending_when_cash_config_is_missing() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["wallet_address"], TEST_SOLANA_PUBKEY);
+    assert_eq!(json["wallet_address"], wallet);
     assert_eq!(json["asset"], "BUSDC");
     assert_eq!(json["status"], "projection_pending");
     assert!(json["quote_id"].is_null());
@@ -647,13 +783,23 @@ async fn transfer_deposit_quote_reports_pending_when_cash_config_is_missing() {
 
 #[tokio::test]
 async fn transfer_deposit_quote_returns_reference_for_ready_usdc_config() {
-    let response = build_router(app_state().with_chain_config(ready_cash_chain_config()))
+    let (wallet, signing_key) = wallet_fixture(9);
+    let app = build_router(
+        app_state()
+            .with_auth_config(Some(test_auth_config()))
+            .with_chain_config(ready_cash_chain_config()),
+    );
+    let wallet_session = wallet_session_token(&app, &wallet, &signing_key).await;
+    let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!(
-                    "/profiles/{TEST_SOLANA_PUBKEY}/transfer-deposit-quotes"
-                ))
+                .uri(format!("/profiles/{wallet}/transfer-deposit-quotes"))
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", valid_privy_token()),
+                )
+                .header("x-bm-wallet-session", wallet_session)
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"asset":"BUSDC","cash_amount":"1000000"}"#))
                 .unwrap(),
@@ -663,21 +809,17 @@ async fn transfer_deposit_quote_returns_reference_for_ready_usdc_config() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["wallet_address"], TEST_SOLANA_PUBKEY);
+    assert_eq!(json["wallet_address"], wallet);
     assert_eq!(json["asset"], "BUSDC");
     assert_eq!(json["cash_amount"], "1000000");
     assert_eq!(json["transfer_amount"], "1000000");
     assert_eq!(json["status"], "ready");
-    assert!(
-        json["reference"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("bm:"))
-    );
-    assert!(
-        json["destination"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["reference"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("bm:")));
+    assert!(json["destination"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
 }
 
 #[tokio::test]

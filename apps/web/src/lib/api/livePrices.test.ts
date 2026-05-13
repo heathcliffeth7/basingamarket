@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockMarketPriceSeries, mockMarkets } from './mock';
 import { applyLiveTickerPriceToMarket, applyLiveTickerPriceToSeries, decimalPriceToScaledString, hydrateLiveMarketPrices } from './livePrices';
+import type { MarketPriceSeries } from './types';
 
 describe('live market prices', () => {
   afterEach(() => {
@@ -192,7 +193,7 @@ describe('live market prices', () => {
     }, 1_778_414_400);
 
     expect(updated?.current_price).toBe('80955500000');
-    expect(updated?.points.at(-1)).toEqual({ ts: 1_778_414_460.345, price: '80955500000' });
+    expect(updated?.points.at(-1)).toEqual({ ts: 1_778_414_460, price: '80955500000' });
 
     const ignored = applyLiveTickerPriceToSeries({ ...series, status: 'closed' }, {
       symbol: 'BTCUSDT',
@@ -203,5 +204,104 @@ describe('live market prices', () => {
       fetchedAt: '2026-05-10T12:05:00.000Z'
     }, 1_778_414_400);
     expect(ignored?.current_price).toBe('80916000000');
+  });
+
+  it('accumulates live ticker updates as one chart point per second', () => {
+    const baseSeries = {
+      symbol: 'BTCUSDT',
+      start_at: 1_778_414_400,
+      end_at: 1_778_414_700,
+      duration_seconds: 300,
+      status: 'live' as const,
+      open_price: '80900000000',
+      current_price: null,
+      close_price: null,
+      points: [{ ts: 1_778_414_400, price: '80900000000' }]
+    };
+    const updates = [
+      { ts: 1_778_414_430.2, currentPrice: '80910000000' },
+      { ts: 1_778_414_490.8, currentPrice: '80925000000' },
+      { ts: 1_778_414_550.1, currentPrice: '80955500000' }
+    ];
+    let updated: MarketPriceSeries | undefined = baseSeries;
+    for (const update of updates) {
+      updated = applyLiveTickerPriceToSeries(updated, {
+        symbol: 'BTCUSDT',
+        currentPrice: update.currentPrice,
+        price: update.currentPrice,
+        ts: update.ts,
+        direction: 'up',
+        fetchedAt: '2026-05-10T12:05:00.000Z'
+      }, 1_778_414_400);
+    }
+
+    expect(updated?.points).toEqual([
+      { ts: 1_778_414_400, price: '80900000000' },
+      { ts: 1_778_414_430, price: '80910000000' },
+      { ts: 1_778_414_490, price: '80925000000' },
+      { ts: 1_778_414_550, price: '80955500000' }
+    ]);
+    expect(updated?.current_price).toBe('80955500000');
+  });
+
+  it('seeds an empty live series from the round open and real ticker timestamp', () => {
+    const updated = applyLiveTickerPriceToSeries(undefined, {
+      symbol: 'BTCUSDT',
+      currentPrice: '80955500000',
+      price: '80955500000',
+      ts: 1_778_414_530.9,
+      direction: 'up',
+      fetchedAt: '2026-05-10T12:05:00.000Z'
+    }, 1_778_414_400, {
+      startAt: 1_778_414_400,
+      endAt: 1_778_414_700,
+      durationSeconds: 300,
+      openPrice: '80900000000'
+    });
+
+    expect(updated).toMatchObject({
+      symbol: 'BTCUSDT',
+      start_at: 1_778_414_400,
+      end_at: 1_778_414_700,
+      duration_seconds: 300,
+      status: 'live',
+      open_price: '80900000000',
+      current_price: '80955500000',
+      close_price: null
+    });
+    expect(updated?.points).toEqual([
+      { ts: 1_778_414_400, price: '80900000000' },
+      { ts: 1_778_414_530, price: '80955500000' }
+    ]);
+  });
+
+  it('replaces same-second live ticker updates instead of adding duplicates', () => {
+    const series = {
+      symbol: 'BTCUSDT',
+      start_at: 1_778_414_400,
+      end_at: 1_778_414_700,
+      duration_seconds: 300,
+      status: 'live' as const,
+      open_price: '80900000000',
+      current_price: '80910000000',
+      close_price: null,
+      points: [
+        { ts: 1_778_414_400, price: '80900000000' },
+        { ts: 1_778_414_430, price: '80910000000' }
+      ]
+    };
+    const updated = applyLiveTickerPriceToSeries(series, {
+      symbol: 'BTCUSDT',
+      currentPrice: '80915000000',
+      price: '80915000000',
+      ts: 1_778_414_430.9,
+      direction: 'up',
+      fetchedAt: '2026-05-10T12:05:00.000Z'
+    }, 1_778_414_400);
+
+    expect(updated?.points).toEqual([
+      { ts: 1_778_414_400, price: '80900000000' },
+      { ts: 1_778_414_430, price: '80915000000' }
+    ]);
   });
 });
