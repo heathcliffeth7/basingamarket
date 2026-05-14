@@ -6,6 +6,7 @@
 
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -47,6 +48,17 @@ pub struct PrivyAccessTokenClaims {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivyIdentityTokenClaims {
+    pub aud: String,
+    pub exp: u64,
+    pub iat: u64,
+    pub iss: String,
+    pub sub: String,
+    #[serde(default)]
+    pub linked_accounts: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerifiedPrivyClaims {
     pub app_id: String,
     pub user_id: String,
@@ -54,6 +66,40 @@ pub struct VerifiedPrivyClaims {
     pub issued_at: u64,
     pub expiration: u64,
     pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifiedPrivyIdentityClaims {
+    pub app_id: String,
+    pub user_id: String,
+    pub issuer: String,
+    pub issued_at: u64,
+    pub expiration: u64,
+    pub linked_accounts: Vec<PrivyLinkedAccount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivyLinkedAccount {
+    pub account_type: String,
+    pub address: Option<String>,
+    pub chain_type: Option<String>,
+}
+
+impl VerifiedPrivyIdentityClaims {
+    pub fn has_linked_solana_wallet(&self, wallet_address: &str) -> bool {
+        has_linked_solana_wallet(&self.linked_accounts, wallet_address)
+    }
+}
+
+pub fn has_linked_solana_wallet(
+    linked_accounts: &[PrivyLinkedAccount],
+    wallet_address: &str,
+) -> bool {
+    linked_accounts.iter().any(|account| {
+        account.account_type == "wallet"
+            && matches!(account.chain_type.as_deref(), Some("solana"))
+            && account.address.as_deref() == Some(wallet_address)
+    })
 }
 
 impl PrivyAuthConfig {
@@ -105,6 +151,73 @@ impl PrivyAuthConfig {
             session_id: claims.sid,
         })
     }
+
+    pub fn verify_identity_token(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedPrivyIdentityClaims, AuthError> {
+        let mut validation = Validation::new(Algorithm::ES256);
+        validation.set_audience(&[self.app_id.as_str()]);
+        validation.set_issuer(&["privy.io"]);
+        validation.set_required_spec_claims(&["aud", "exp", "iat", "iss", "sub"]);
+
+        let key = DecodingKey::from_ec_pem(self.verification_key.as_bytes())
+            .map_err(|_| AuthError::InvalidVerificationKey)?;
+        let token = decode::<PrivyIdentityTokenClaims>(token, &key, &validation)
+            .map_err(|_| AuthError::InvalidToken)?;
+        let claims = token.claims;
+        if claims.sub.trim().is_empty() {
+            return Err(AuthError::InvalidToken);
+        }
+
+        Ok(VerifiedPrivyIdentityClaims {
+            app_id: claims.aud,
+            user_id: claims.sub,
+            issuer: claims.iss,
+            issued_at: claims.iat,
+            expiration: claims.exp,
+            linked_accounts: parse_privy_linked_accounts(claims.linked_accounts.as_ref())?,
+        })
+    }
+}
+
+pub fn parse_privy_linked_accounts(
+    value: Option<&Value>,
+) -> Result<Vec<PrivyLinkedAccount>, AuthError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let accounts = match value {
+        Value::String(raw) if raw.trim().is_empty() => Vec::new(),
+        Value::String(raw) => {
+            serde_json::from_str::<Vec<Value>>(raw).map_err(|_| AuthError::InvalidToken)?
+        }
+        Value::Array(values) => values.clone(),
+        _ => return Err(AuthError::InvalidToken),
+    };
+
+    accounts
+        .into_iter()
+        .map(|account| {
+            let object = account.as_object().ok_or(AuthError::InvalidToken)?;
+            let account_type = read_string_field(object, "type")
+                .ok_or(AuthError::InvalidToken)?
+                .to_owned();
+            let address = read_string_field(object, "address").map(str::to_owned);
+            let chain_type = read_string_field(object, "chainType")
+                .or_else(|| read_string_field(object, "chain_type"))
+                .map(str::to_owned);
+            Ok(PrivyLinkedAccount {
+                account_type,
+                address,
+                chain_type,
+            })
+        })
+        .collect()
+}
+
+fn read_string_field<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+    object.get(key).and_then(Value::as_str)
 }
 
 pub fn normalize_solana_pubkey(address: &str) -> Result<String, AuthError> {
@@ -251,6 +364,122 @@ mod tests {
         assert_eq!(claims.user_id, "did:privy:user-1");
         assert_eq!(claims.issuer, "privy.io");
         assert_eq!(claims.session_id, "session-1");
+    }
+
+    #[test]
+    fn verifies_identity_token_linked_solana_wallets() {
+        let wallet = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+        let now = get_current_timestamp();
+        let linked_accounts = serde_json::json!([
+            {
+                "type": "google_oauth",
+                "subject": "google-user"
+            },
+            {
+                "type": "wallet",
+                "address": wallet,
+                "chainType": "solana",
+                "walletClientType": "privy"
+            }
+        ]);
+        let token = encode(
+            &Header::new(Algorithm::ES256),
+            &PrivyIdentityTokenClaims {
+                aud: TEST_APP_ID.to_owned(),
+                exp: now + 3600,
+                iat: now,
+                iss: "privy.io".to_owned(),
+                sub: "did:privy:user-1".to_owned(),
+                linked_accounts: Some(Value::String(linked_accounts.to_string())),
+            },
+            &EncodingKey::from_ec_pem(test_es256_keys().signing_pem.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let config = PrivyAuthConfig::new(TEST_APP_ID, &test_es256_keys().verifying_pem).unwrap();
+
+        let claims = config.verify_identity_token(&token).unwrap();
+
+        assert_eq!(claims.user_id, "did:privy:user-1");
+        assert!(claims.has_linked_solana_wallet(wallet));
+        assert!(!claims.has_linked_solana_wallet("So11111111111111111111111111111111111111112"));
+    }
+
+    #[test]
+    fn identity_token_accepts_array_and_snake_case_chain_type() {
+        let wallet = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+        let now = get_current_timestamp();
+        let token = encode(
+            &Header::new(Algorithm::ES256),
+            &PrivyIdentityTokenClaims {
+                aud: TEST_APP_ID.to_owned(),
+                exp: now + 3600,
+                iat: now,
+                iss: "privy.io".to_owned(),
+                sub: "did:privy:user-1".to_owned(),
+                linked_accounts: Some(serde_json::json!([
+                    {
+                        "type": "wallet",
+                        "address": wallet,
+                        "chain_type": "solana"
+                    }
+                ])),
+            },
+            &EncodingKey::from_ec_pem(test_es256_keys().signing_pem.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let config = PrivyAuthConfig::new(TEST_APP_ID, &test_es256_keys().verifying_pem).unwrap();
+
+        let claims = config.verify_identity_token(&token).unwrap();
+
+        assert!(claims.has_linked_solana_wallet(wallet));
+    }
+
+    #[test]
+    fn parses_privy_rest_linked_accounts_for_solana_wallets() {
+        let wallet = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+        let linked_accounts = serde_json::json!([
+            {
+                "type": "email",
+                "address": "user@example.com"
+            },
+            {
+                "type": "wallet",
+                "address": wallet,
+                "chain_type": "solana"
+            }
+        ]);
+
+        let accounts = parse_privy_linked_accounts(Some(&linked_accounts)).unwrap();
+
+        assert!(has_linked_solana_wallet(&accounts, wallet));
+        assert!(!has_linked_solana_wallet(
+            &accounts,
+            "So11111111111111111111111111111111111111112"
+        ));
+    }
+
+    #[test]
+    fn identity_token_rejects_bad_linked_accounts() {
+        let now = get_current_timestamp();
+        let token = encode(
+            &Header::new(Algorithm::ES256),
+            &PrivyIdentityTokenClaims {
+                aud: TEST_APP_ID.to_owned(),
+                exp: now + 3600,
+                iat: now,
+                iss: "privy.io".to_owned(),
+                sub: "did:privy:user-1".to_owned(),
+                linked_accounts: Some(Value::String("not-json".to_owned())),
+            },
+            &EncodingKey::from_ec_pem(test_es256_keys().signing_pem.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let config = PrivyAuthConfig::new(TEST_APP_ID, &test_es256_keys().verifying_pem).unwrap();
+
+        assert_eq!(
+            config.verify_identity_token(&token),
+            Err(AuthError::InvalidToken)
+        );
     }
 
     #[test]

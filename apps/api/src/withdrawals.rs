@@ -57,7 +57,7 @@ pub(crate) async fn create_withdrawal_quote(
 ) -> Result<Json<WithdrawalQuoteResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address gecersiz."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let config = resolve_withdraw_config(&state)?;
     let cash_amount = parse_cash_amount(&payload.cash_amount)?;
     let cash_balance = state
@@ -132,7 +132,7 @@ pub(crate) async fn verify_withdrawal(
 ) -> Result<Json<WithdrawalResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address gecersiz."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let config = resolve_withdraw_config(&state)?;
     let user_signature = payload.user_signature.trim().to_owned();
     if !is_valid_solana_signature(&user_signature) {

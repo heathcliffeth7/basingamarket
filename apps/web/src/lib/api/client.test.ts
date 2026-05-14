@@ -77,7 +77,7 @@ describe('api client', () => {
       marketId: '1',
       roundId: '5928355',
       accessToken: 'privy-access-token',
-      walletSessionToken: 'wallet-session-token'
+      identityToken: 'privy-identity-token'
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -86,10 +86,46 @@ describe('api client', () => {
         method: 'POST',
         headers: expect.objectContaining({
           authorization: 'Bearer privy-access-token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'privy-identity-token'
         })
       })
     );
+  });
+
+  it('omits the identity-token header when Privy does not return one', async () => {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', 'http://api.test');
+    vi.stubEnv('NEXT_PUBLIC_USE_MOCK_FALLBACK', 'false');
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ticket_id: '7',
+        status: 'listed',
+        signature: 'devnet-signature',
+        explorer_url: 'https://explorer.solana.com/tx/devnet-signature?cluster=devnet',
+        price_per_ticket: '500000'
+      })
+    });
+    vi.stubGlobal('fetch', fetch);
+    const { api: liveApi } = await import('./client');
+
+    await liveApi.listTicket({
+      ticketId: '7',
+      sellerWallet: SOLANA_DEVNET_PUBKEY,
+      pricePerTicket: '500000',
+      marketId: '1',
+      roundId: '5928355',
+      accessToken: 'privy-access-token',
+      identityToken: null
+    });
+
+    const request = fetch.mock.calls[0]?.[1] as RequestInit;
+    expect(request.headers).toEqual(expect.objectContaining({
+      authorization: 'Bearer privy-access-token'
+    }));
+    expect(request.headers).toEqual(expect.not.objectContaining({
+      'x-bm-identity-token': expect.any(String)
+    }));
   });
 
   it('fetches the live orderbook endpoint', async () => {
@@ -157,7 +193,7 @@ describe('api client', () => {
       side: 'UP',
       usdcIn: '1000000',
       accessToken: 'privy-access-token',
-      walletSessionToken: 'wallet-session-token'
+      identityToken: 'privy-identity-token'
     })).resolves.toMatchObject({
       execution_type: 'listed_ask',
       spent_usdc: '800000'
@@ -169,7 +205,7 @@ describe('api client', () => {
         method: 'POST',
         headers: expect.objectContaining({
           authorization: 'Bearer privy-access-token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'privy-identity-token'
         }),
         body: JSON.stringify({
           market_id: 1,
@@ -216,7 +252,7 @@ describe('api client', () => {
       side: 'UP',
       usdcIn: '1000000',
       accessToken: 'privy-access-token',
-      walletSessionToken: 'wallet-session-token',
+      identityToken: 'privy-identity-token',
       roundRetryDelayMs: 0,
       onRoundRetry
     })).resolves.toMatchObject({
@@ -262,7 +298,7 @@ describe('api client', () => {
       side: 'UP',
       usdcIn: '1000000',
       accessToken: 'privy-access-token',
-      walletSessionToken: 'wallet-session-token',
+      identityToken: 'privy-identity-token',
       roundRetryDelayMs: 0,
       onRoundRetry
     })).resolves.toMatchObject({
@@ -293,7 +329,7 @@ describe('api client', () => {
       side: 'UP',
       usdcIn: '1000000',
       accessToken: 'privy-access-token',
-      walletSessionToken: 'wallet-session-token',
+      identityToken: 'privy-identity-token',
       roundRetryAttempts: 2,
       roundRetryDelayMs: 0
     })).rejects.toMatchObject({
@@ -447,7 +483,7 @@ describe('api client', () => {
     const { api: liveApi } = await import('./client');
 
     await expect(liveApi.getDepositConfig()).resolves.toMatchObject({ status: 'ready' });
-    await expect(liveApi.verifyDeposit(SOLANA_DEVNET_PUBKEY, 'devnet-signature', 'token', 'wallet-session-token')).resolves.toMatchObject({
+    await expect(liveApi.verifyDeposit(SOLANA_DEVNET_PUBKEY, 'devnet-signature', 'token', 'identity-token')).resolves.toMatchObject({
       currency: 'BUSDC',
       cash_balance: '2500000',
       status: 'credited'
@@ -460,7 +496,7 @@ describe('api client', () => {
         body: JSON.stringify({ signature: 'devnet-signature' }),
         headers: expect.objectContaining({
           authorization: 'Bearer token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'identity-token'
         })
       })
     );
@@ -543,11 +579,11 @@ describe('api client', () => {
     vi.stubGlobal('fetch', fetch);
     const { api: liveApi } = await import('./client');
 
-    await expect(liveApi.getSolDepositQuote(SOLANA_DEVNET_PUBKEY, '1000000', 'token', 'wallet-session-token')).resolves.toMatchObject({
+    await expect(liveApi.getSolDepositQuote(SOLANA_DEVNET_PUBKEY, '1000000', 'token', 'identity-token')).resolves.toMatchObject({
       status: 'ready',
       lamports: '6666667'
     });
-    await expect(liveApi.verifySolDeposit(SOLANA_DEVNET_PUBKEY, 'quote-1', 'devnet-signature', 'token', 'wallet-session-token')).resolves.toMatchObject({
+    await expect(liveApi.verifySolDeposit(SOLANA_DEVNET_PUBKEY, 'quote-1', 'devnet-signature', 'token', 'identity-token')).resolves.toMatchObject({
       cash_balance: '1000000',
       status: 'credited'
     });
@@ -558,7 +594,7 @@ describe('api client', () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           authorization: 'Bearer token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'identity-token'
         })
       })
     );
@@ -569,7 +605,7 @@ describe('api client', () => {
         body: JSON.stringify({ quote_id: 'quote-1', signature: 'devnet-signature' }),
         headers: expect.objectContaining({
           authorization: 'Bearer token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'identity-token'
         })
       })
     );
@@ -593,7 +629,7 @@ describe('api client', () => {
 
     let caught: unknown;
     try {
-      await liveApi.verifySolDeposit(SOLANA_DEVNET_PUBKEY, 'quote-1', 'devnet-signature', 'token', 'wallet-session-token');
+      await liveApi.verifySolDeposit(SOLANA_DEVNET_PUBKEY, 'quote-1', 'devnet-signature', 'token', 'identity-token');
     } catch (error) {
       caught = error;
     }
@@ -651,12 +687,12 @@ describe('api client', () => {
     vi.stubGlobal('fetch', fetch);
     const { api: liveApi } = await import('./client');
 
-    await expect(liveApi.createTransferDepositQuote(SOLANA_DEVNET_PUBKEY, 'BUSDC', '1000000', 'token', 'wallet-session-token')).resolves.toMatchObject({
+    await expect(liveApi.createTransferDepositQuote(SOLANA_DEVNET_PUBKEY, 'BUSDC', '1000000', 'token', 'identity-token')).resolves.toMatchObject({
       asset: 'BUSDC',
       reference: 'bm:quote-1',
       status: 'ready'
     });
-    await expect(liveApi.verifyTransferDeposit(SOLANA_DEVNET_PUBKEY, 'quote-1', 'devnet-signature', 'token', 'wallet-session-token')).resolves.toMatchObject({
+    await expect(liveApi.verifyTransferDeposit(SOLANA_DEVNET_PUBKEY, 'quote-1', 'devnet-signature', 'token', 'identity-token')).resolves.toMatchObject({
       cash_balance: '1000000',
       status: 'credited'
     });
@@ -669,7 +705,7 @@ describe('api client', () => {
         body: JSON.stringify({ asset: 'BUSDC', cash_amount: '1000000' }),
         headers: expect.objectContaining({
           authorization: 'Bearer token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'identity-token'
         })
       })
     );
@@ -680,7 +716,7 @@ describe('api client', () => {
         body: JSON.stringify({ quote_id: 'quote-1', signature: 'devnet-signature' }),
         headers: expect.objectContaining({
           authorization: 'Bearer token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'identity-token'
         })
       })
     );
@@ -709,7 +745,7 @@ describe('api client', () => {
     vi.stubGlobal('fetch', fetch);
     const { api: liveApi } = await import('./client');
 
-    await expect(liveApi.verifyTransferDeposit(SOLANA_DEVNET_PUBKEY, null, 'devnet-signature', 'token', 'wallet-session-token')).resolves.toMatchObject({
+    await expect(liveApi.verifyTransferDeposit(SOLANA_DEVNET_PUBKEY, null, 'devnet-signature', 'token', 'identity-token')).resolves.toMatchObject({
       status: 'credited'
     });
 
@@ -783,11 +819,11 @@ describe('api client', () => {
     const { api: liveApi } = await import('./client');
 
     await expect(liveApi.getWithdrawConfig()).resolves.toMatchObject({ status: 'ready' });
-    await expect(liveApi.createWithdrawalQuote(SOLANA_DEVNET_PUBKEY, '1000000', 'token', SOLANA_DEVNET_PUBKEY, 'wallet-session-token')).resolves.toMatchObject({
+    await expect(liveApi.createWithdrawalQuote(SOLANA_DEVNET_PUBKEY, '1000000', 'token', SOLANA_DEVNET_PUBKEY, 'identity-token')).resolves.toMatchObject({
       quote_id: 'withdraw-quote-1',
       message: 'withdraw message'
     });
-    await expect(liveApi.verifyWithdrawal(SOLANA_DEVNET_PUBKEY, 'withdraw-quote-1', 'user-signature', 'token', 'wallet-session-token')).resolves.toMatchObject({
+    await expect(liveApi.verifyWithdrawal(SOLANA_DEVNET_PUBKEY, 'withdraw-quote-1', 'user-signature', 'token', 'identity-token')).resolves.toMatchObject({
       vault_signature: 'vault-signature',
       status: 'sent'
     });
@@ -800,7 +836,7 @@ describe('api client', () => {
         body: JSON.stringify({ cash_amount: '1000000', destination: SOLANA_DEVNET_PUBKEY }),
         headers: expect.objectContaining({
           authorization: 'Bearer token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'identity-token'
         })
       })
     );
@@ -811,7 +847,7 @@ describe('api client', () => {
         body: JSON.stringify({ quote_id: 'withdraw-quote-1', user_signature: 'user-signature' }),
         headers: expect.objectContaining({
           authorization: 'Bearer token',
-          'x-bm-wallet-session': 'wallet-session-token'
+          'x-bm-identity-token': 'identity-token'
         })
       })
     );

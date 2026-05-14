@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { PrivyProvider, useLinkAccount, useLogin, useModalStatus, usePrivy } from '@privy-io/react-auth';
+import { getIdentityToken as getPrivyIdentityToken, PrivyProvider, useIdentityToken, useLinkAccount, useLogin, useModalStatus, usePrivy } from '@privy-io/react-auth';
 import type { User } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors, useWallets as useSolanaWallets } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
@@ -79,6 +79,7 @@ type AuthContextValue = {
   ready: boolean;
   authenticated: boolean;
   user: User | null;
+  identityToken: string | null;
   privyConfigured: boolean;
   privyAppIdFingerprint: string;
   authError: SolanaAuthError | null;
@@ -103,6 +104,7 @@ const privyAppIdFingerprint = getPrivyAppIdFingerprint(privyAppId);
 
 function RealPrivyBridge({ children }: { children: ReactNode }) {
   const privy = usePrivy();
+  const { identityToken } = useIdentityToken();
   const { isOpen: privyModalOpen } = useModalStatus();
   const { ready: solanaWalletsReady, wallets: solanaWallets } = useSolanaWallets();
   const privyUserId = userIdForWalletSnapshot(privy.user);
@@ -265,6 +267,7 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
       ready: privy.ready,
       authenticated: privy.authenticated,
       user: privy.user,
+      identityToken,
       privyConfigured: true,
       privyAppIdFingerprint,
       authError,
@@ -286,6 +289,7 @@ function RealPrivyBridge({ children }: { children: ReactNode }) {
       clearAuthError,
       directSolanaLoginStatus,
       hasSolanaWallet,
+      identityToken,
       identityWalletAddress,
       loginSolana,
       logout,
@@ -312,6 +316,7 @@ function LocalAuthProvider({ children }: { children: ReactNode }) {
         ready: true,
         authenticated: false,
         user: null,
+        identityToken: null,
         privyConfigured: false,
         privyAppIdFingerprint,
         authError: null,
@@ -388,4 +393,18 @@ export function useAuth() {
     throw new Error('useAuth must be used inside AuthProvider');
   }
   return value;
+}
+
+export function useProtectedAuthTokens() {
+  const { authenticated, getAccessToken, identityToken } = useAuth();
+
+  const getAuthTokens = useCallback(async () => {
+    if (!authenticated) throw new Error('Login session required.');
+    const accessToken = await getAccessToken();
+    if (!accessToken) throw new Error('Login session required.');
+    const resolvedIdentityToken = identityToken ?? await getPrivyIdentityToken().catch(() => null);
+    return { accessToken, identityToken: resolvedIdentityToken };
+  }, [authenticated, getAccessToken, identityToken]);
+
+  return { getAuthTokens, identityToken };
 }

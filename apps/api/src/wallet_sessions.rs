@@ -5,7 +5,7 @@ use axum::{
     http::{HeaderMap, HeaderName},
     Json,
 };
-use basingamarket_auth::normalize_solana_pubkey;
+use basingamarket_auth::{has_linked_solana_wallet, normalize_solana_pubkey, AuthError};
 use basingamarket_chain::verify_solana_message_signature;
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::{require_privy_session, ApiError, AppState};
+use crate::{privy_users::PrivyUserLookupError, require_privy_session, ApiError, AppState};
 
 const APP_NAME: &str = "BasingaMarket";
 const WALLET_SESSION_ISSUER: &str = "basingamarket-api";
@@ -24,6 +24,7 @@ const WALLET_SESSION_SECRET_ENV: &str = "BM_WALLET_SESSION_SECRET";
 const CHALLENGE_TTL_SECONDS: i64 = 5 * 60;
 const WALLET_SESSION_TTL_SECONDS: i64 = 30 * 60;
 const WALLET_SESSION_HEADER: HeaderName = HeaderName::from_static("x-bm-wallet-session");
+const IDENTITY_TOKEN_HEADER: HeaderName = HeaderName::from_static("x-bm-identity-token");
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WalletChallengeStore {
@@ -169,13 +170,47 @@ pub(crate) async fn create_wallet_session(
     }))
 }
 
-pub(crate) fn require_wallet_owner(
+pub(crate) async fn require_wallet_owner(
     state: &AppState,
     headers: &HeaderMap,
     expected_wallet: &str,
 ) -> Result<(), ApiError> {
     let claims = require_privy_session(state, headers)?;
-    let session_token = wallet_session_header(headers)?;
+    if let Some(identity_token) = identity_token_header(headers) {
+        let auth = state
+            .auth
+            .as_ref()
+            .ok_or_else(ApiError::auth_not_configured)?;
+        let identity_claims = auth
+            .verify_identity_token(identity_token)
+            .map_err(|error| match error {
+                AuthError::MissingAuthConfig | AuthError::InvalidVerificationKey => {
+                    ApiError::auth_not_configured()
+                }
+                _ => wallet_session_invalid(),
+            })?;
+        if identity_claims.user_id != claims.user_id {
+            return Err(wallet_session_invalid());
+        }
+        if !identity_claims.has_linked_solana_wallet(expected_wallet) {
+            return Err(wallet_session_wallet_mismatch());
+        }
+        return Ok(());
+    }
+
+    if let Some(privy_users) = &state.privy_users {
+        let linked_accounts = privy_users
+            .linked_accounts_for_user(&claims.user_id)
+            .await
+            .map_err(privy_user_lookup_error)?;
+        if !has_linked_solana_wallet(&linked_accounts, expected_wallet) {
+            return Err(wallet_session_wallet_mismatch());
+        }
+        return Ok(());
+    }
+
+    let session_token =
+        optional_wallet_session_header(headers).ok_or_else(wallet_session_unconfigured)?;
     let wallet_claims = decode_wallet_session_token(session_token)?;
     if wallet_claims.sub != claims.user_id || wallet_claims.sid != claims.session_id {
         return Err(wallet_session_invalid());
@@ -184,6 +219,54 @@ pub(crate) fn require_wallet_owner(
         return Err(wallet_session_wallet_mismatch());
     }
     Ok(())
+}
+
+fn privy_user_lookup_error(error: PrivyUserLookupError) -> ApiError {
+    if error.is_not_found() {
+        return wallet_session_invalid();
+    }
+    if error.is_config_error() {
+        return wallet_session_unconfigured();
+    }
+    match error {
+        PrivyUserLookupError::UserMismatch
+        | PrivyUserLookupError::InvalidLinkedAccounts(AuthError::InvalidToken) => {
+            wallet_session_invalid()
+        }
+        PrivyUserLookupError::InvalidLinkedAccounts(
+            AuthError::MissingAuthConfig | AuthError::InvalidVerificationKey,
+        ) => wallet_session_unconfigured(),
+        PrivyUserLookupError::InvalidLinkedAccounts(error) => {
+            tracing::warn!(?error, "privy user linked_accounts could not be parsed");
+            wallet_session_invalid()
+        }
+        PrivyUserLookupError::Request(error) => {
+            tracing::warn!(error = %error, "privy user lookup request failed");
+            ApiError::service_unavailable(
+                "privy_user_lookup_failed",
+                "Wallet ownership verification is temporarily unavailable.",
+            )
+        }
+        PrivyUserLookupError::Status(status) => {
+            tracing::warn!(%status, "privy user lookup returned an error status");
+            ApiError::service_unavailable(
+                "privy_user_lookup_failed",
+                "Wallet ownership verification is temporarily unavailable.",
+            )
+        }
+        _ => ApiError::service_unavailable(
+            "privy_user_lookup_failed",
+            "Wallet ownership verification is temporarily unavailable.",
+        ),
+    }
+}
+
+fn identity_token_header(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(&IDENTITY_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 impl WalletChallengeStore {
@@ -269,13 +352,12 @@ fn decode_wallet_session_token(token: &str) -> Result<WalletSessionClaims, ApiEr
     Ok(token.claims)
 }
 
-fn wallet_session_header(headers: &HeaderMap) -> Result<&str, ApiError> {
+fn optional_wallet_session_header(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(&WALLET_SESSION_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(wallet_session_required)
 }
 
 fn wallet_session_secret() -> Result<String, ApiError> {
@@ -301,13 +383,6 @@ fn timestamp(value: DateTime<Utc>) -> Result<u64, ApiError> {
         .timestamp()
         .try_into()
         .map_err(|_| ApiError::internal("wallet session timestamp is invalid"))
-}
-
-fn wallet_session_required() -> ApiError {
-    ApiError::unauthorized_with_code(
-        "wallet_session_required",
-        "Wallet ownership verification required.",
-    )
 }
 
 fn wallet_session_invalid() -> ApiError {
@@ -339,6 +414,7 @@ fn wallet_session_unconfigured() -> ApiError {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn wallet_session_token_for_test(wallet_address: &str) -> String {
     encode_wallet_session_token(WalletSessionTokenInput {
         wallet_address,

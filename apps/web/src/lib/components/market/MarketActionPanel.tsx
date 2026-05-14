@@ -7,8 +7,7 @@ import { ApiClientError, api } from '@/lib/api/client';
 import { cashBalanceQueryKey, cashBalanceQueryOptions } from '@/lib/api/cashBalanceQuery';
 import type { CashBid, Market, MarketCurve, MarketPriceSeries, Ticket } from '@/lib/api/types';
 import type { SimpleMarketRead } from '@/lib/utils/signals';
-import { useAuth } from '@/lib/auth/privy';
-import { useWalletSession } from '@/lib/auth/walletSession';
+import { useAuth, useProtectedAuthTokens } from '@/lib/auth/privy';
 import { cn } from '@/lib/utils/cn';
 import { formatTokenAmount, formatUsdPrice, parseTokenAmountToBaseUnits } from '@/lib/utils/amount';
 import Badge from '@/lib/components/ui/Badge';
@@ -51,7 +50,7 @@ export default function MarketActionPanel({
     solanaWalletsReady,
     solanaWalletResolving
   } = useAuth();
-  const { getWalletSession } = useWalletSession();
+  const { getAuthTokens } = useProtectedAuthTokens();
   const [selectedSide, setSelectedSide] = useState<TradeSide>(selectedOrderBookAsk?.side ?? 'UP');
   const [amount, setAmount] = useState('1');
   const [activeTradeTab, setActiveTradeTab] = useState<'buy' | 'sell'>('buy');
@@ -167,7 +166,7 @@ export default function MarketActionPanel({
       if (!amountBaseUnits) throw new Error('Enter a valid BUSDC amount.');
       if (!canBuy) throw new Error('This round is closed for fresh entries.');
       if (!hasEnoughCash) throw new Error('BUSDC balance is too low.');
-      const walletSession = await getWalletSession(walletAddress);
+      const authTokens = await getAuthTokens();
 
       const result = await api.executeMarketBuy({
         roundId: curve.round_id,
@@ -175,8 +174,8 @@ export default function MarketActionPanel({
         buyerWallet: walletAddress,
         side: selectedSide,
         usdcIn: amountBaseUnits,
-        accessToken: walletSession.accessToken,
-        walletSessionToken: walletSession.walletSessionToken,
+        accessToken: authTokens.accessToken,
+        identityToken: authTokens.identityToken,
         onRoundRetry: () => setStatusMessage('Preparing devnet round...')
       });
       return result;
@@ -205,15 +204,15 @@ export default function MarketActionPanel({
       if (!marketId || !roundId) throw new Error('Round is not ready.');
       const pricePerTicket = parseTokenAmountToBaseUnits(listingPrice);
       if (!pricePerTicket) throw new Error('Enter a valid listing price.');
-      const walletSession = await getWalletSession(walletAddress);
+      const authTokens = await getAuthTokens();
       return api.listTicket({
         ticketId: ticket.ticket_id,
         sellerWallet: walletAddress,
         pricePerTicket,
         marketId,
         roundId,
-        accessToken: walletSession.accessToken,
-        walletSessionToken: walletSession.walletSessionToken
+        accessToken: authTokens.accessToken,
+        identityToken: authTokens.identityToken
       });
     },
     onSuccess: (result) => {
@@ -228,14 +227,14 @@ export default function MarketActionPanel({
       if (!curve) throw new Error('Curve is not loaded yet.');
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
       if (!marketId || !roundId) throw new Error('Round is not ready.');
-      const walletSession = await getWalletSession(walletAddress);
+      const authTokens = await getAuthTokens();
       return api.instantSell({
         ticketId: ticket.ticket_id,
         sellerWallet: walletAddress,
         marketId,
         roundId,
-        accessToken: walletSession.accessToken,
-        walletSessionToken: walletSession.walletSessionToken
+        accessToken: authTokens.accessToken,
+        identityToken: authTokens.identityToken
       });
     },
     onSuccess: (result) => {
@@ -250,14 +249,14 @@ export default function MarketActionPanel({
       if (!curve) throw new Error('Curve is not loaded yet.');
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
       if (!marketId || !roundId) throw new Error('Round is not ready.');
-      const walletSession = await getWalletSession(walletAddress);
+      const authTokens = await getAuthTokens();
       return api.cancelListing({
         ticketId: ticket.ticket_id,
         sellerWallet: walletAddress,
         marketId,
         roundId,
-        accessToken: walletSession.accessToken,
-        walletSessionToken: walletSession.walletSessionToken
+        accessToken: authTokens.accessToken,
+        identityToken: authTokens.identityToken
       });
     },
     onSuccess: (result) => {
@@ -275,7 +274,7 @@ export default function MarketActionPanel({
       const pricePerTicket = parseTokenAmountToBaseUnits(bidPrice);
       const maxUsdc = parseTokenAmountToBaseUnits(bidMax);
       if (!pricePerTicket || !maxUsdc) throw new Error('Enter a valid bid.');
-      const walletSession = await getWalletSession(walletAddress);
+      const authTokens = await getAuthTokens();
       return api.createBid({
         roundId,
         marketId,
@@ -283,8 +282,8 @@ export default function MarketActionPanel({
         side: bidSide,
         pricePerTicket,
         maxUsdc,
-        accessToken: walletSession.accessToken,
-        walletSessionToken: walletSession.walletSessionToken
+        accessToken: authTokens.accessToken,
+        identityToken: authTokens.identityToken
       });
     },
     onSuccess: (result) => {
@@ -304,15 +303,15 @@ export default function MarketActionPanel({
       if (!marketId || !roundId) throw new Error('Round is not ready.');
       if (!tradingReady) throw new Error('This round is closed for trading.');
       if (!hasEnoughSelectedAskCash) throw new Error('BUSDC balance is too low.');
-      const walletSession = await getWalletSession(walletAddress);
+      const authTokens = await getAuthTokens();
       const result = await api.buyListing({
         ticketId: ask.lot_id,
         buyerWallet: walletAddress,
         maxPricePerTicket: ask.price_per_ticket,
         marketId,
         roundId,
-        accessToken: walletSession.accessToken,
-        walletSessionToken: walletSession.walletSessionToken
+        accessToken: authTokens.accessToken,
+        identityToken: authTokens.identityToken
       });
       return { ask, result };
     },
@@ -327,12 +326,12 @@ export default function MarketActionPanel({
   const claimTicketMutation = useMutation({
     mutationFn: async (ticket: Ticket) => {
       if (!walletAddress) throw new Error('Solana wallet unavailable.');
-      const walletSession = await getWalletSession(walletAddress);
+      const authTokens = await getAuthTokens();
       return api.claimTicket({
         ticketId: ticket.ticket_id,
         claimerWallet: walletAddress,
-        accessToken: walletSession.accessToken,
-        walletSessionToken: walletSession.walletSessionToken
+        accessToken: authTokens.accessToken,
+        identityToken: authTokens.identityToken
       });
     },
     onSuccess: (result) => {

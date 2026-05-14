@@ -48,7 +48,7 @@ describe('solana auth helpers', () => {
 
   it('keeps Google login available without auto-creating embedded Solana wallets', () => {
     expect(solanaLoginMethodsAndOrder.primary).toContain('google');
-    expect(solanaEmbeddedWalletCreateOnLogin).toBe('off');
+    expect(solanaEmbeddedWalletCreateOnLogin).toBe('users-without-wallets');
   });
 
   it('includes OKX in the Solana wallet modal list', () => {

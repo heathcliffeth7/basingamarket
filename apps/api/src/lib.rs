@@ -10,6 +10,7 @@ mod error;
 mod health;
 mod http_config;
 mod metrics;
+mod privy_users;
 mod profile_activity;
 mod profile_tickets;
 mod protocol_markets;
@@ -55,6 +56,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 pub(crate) use error::ApiError;
+use privy_users::PrivyUserLookupClient;
 use public_format::{
     public_canvas_ticket_status, public_share_status, public_ticket_status, short_address,
 };
@@ -67,6 +69,7 @@ pub struct AppState {
     pub bus: MemoryEventBus,
     pub cache: MemoryCache,
     pub auth: Option<PrivyAuthConfig>,
+    pub(crate) privy_users: Option<PrivyUserLookupClient>,
     pub price_provider: MarketPriceProvider,
     pub sol_deposit_price_provider: SolDepositPriceProvider,
     pub chain_config: SolanaDevnetConfig,
@@ -92,6 +95,7 @@ impl AppState {
             bus,
             cache: MemoryCache::default(),
             auth: PrivyAuthConfig::from_env().ok(),
+            privy_users: PrivyUserLookupClient::from_env(),
             price_provider: MarketPriceProvider::disabled(),
             sol_deposit_price_provider: SolDepositPriceProvider::binance(),
             chain_config,
@@ -105,6 +109,15 @@ impl AppState {
 
     pub fn with_auth_config(mut self, auth: Option<PrivyAuthConfig>) -> Self {
         self.auth = auth;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_privy_user_lookup(
+        mut self,
+        privy_users: Option<PrivyUserLookupClient>,
+    ) -> Self {
+        self.privy_users = privy_users;
         self
     }
 
@@ -669,7 +682,7 @@ async fn claim_ticket(
 ) -> Result<Json<ClaimTicketResponse>, ApiError> {
     let claimer = normalize_solana_pubkey(&input.claimer_wallet)
         .map_err(|_| ApiError::bad_request("invalid_wallet", "Wallet address gecersiz."))?;
-    wallet_sessions::require_wallet_owner(&state, &headers, &claimer)?;
+    wallet_sessions::require_wallet_owner(&state, &headers, &claimer).await?;
     let ticket = state
         .store
         .get_ticket(id)

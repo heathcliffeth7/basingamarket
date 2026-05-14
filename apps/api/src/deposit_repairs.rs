@@ -29,7 +29,7 @@ pub(crate) async fn repair_sol_deposit(
 
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let signature = payload.signature.trim().to_owned();
     if !is_valid_solana_signature(&signature) {
         return Err(ApiError::bad_request(

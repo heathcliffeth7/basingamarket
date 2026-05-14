@@ -16,6 +16,7 @@ import type { SelectedOrderBookAsk } from './MarketOrderBook';
 const authState = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   loginSolana: vi.fn(),
+  identityToken: 'privy-identity-token' as string | null,
   walletAddress: '11111111111111111111111111111111' as string | null,
   solanaWalletAddress: '11111111111111111111111111111111' as string | null,
   solanaWallet: null,
@@ -23,10 +24,10 @@ const authState = vi.hoisted(() => ({
   solanaWalletResolving: false,
   hasSolanaWallet: true
 }));
-const walletSessionMock = vi.hoisted(() => ({
-  getWalletSession: vi.fn(async () => ({
+const authTokensMock = vi.hoisted(() => ({
+  getAuthTokens: vi.fn(async () => ({
     accessToken: 'privy-access-token',
-    walletSessionToken: 'wallet-session-token'
+    identityToken: 'privy-identity-token' as string | null
   }))
 }));
 
@@ -39,11 +40,8 @@ const selectedAsk: SelectedOrderBookAsk = {
 };
 
 vi.mock('@/lib/auth/privy', () => ({
-  useAuth: () => authState
-}));
-
-vi.mock('@/lib/auth/walletSession', () => ({
-  useWalletSession: () => walletSessionMock
+  useAuth: () => authState,
+  useProtectedAuthTokens: () => authTokensMock
 }));
 
 function renderPanel(viewingLive: boolean, curveOverride?: MarketCurve | null) {
@@ -101,11 +99,17 @@ describe('MarketActionPanel', () => {
   beforeEach(() => {
     authState.getAccessToken.mockResolvedValue('privy-access-token');
     authState.loginSolana.mockResolvedValue(undefined);
+    authState.identityToken = 'privy-identity-token';
     authState.solanaWalletAddress = '11111111111111111111111111111111';
     authState.solanaWallet = null;
     authState.solanaWalletsReady = true;
     authState.solanaWalletResolving = false;
     authState.hasSolanaWallet = true;
+    authTokensMock.getAuthTokens.mockClear();
+    authTokensMock.getAuthTokens.mockResolvedValue({
+      accessToken: 'privy-access-token',
+      identityToken: 'privy-identity-token'
+    });
   });
 
   afterEach(() => {
@@ -152,6 +156,85 @@ describe('MarketActionPanel', () => {
     expect(html).toContain('Sell');
     expect(html).not.toContain('Split');
     expect(html).not.toContain('Outcome:');
+  });
+
+  it('market buy uses Privy identity tokens without wallet-session signing', async () => {
+    const market = liveMarket();
+    const curve = mockCurves[market.market_id];
+    const executeMarketBuySpy = vi.spyOn(api, 'executeMarketBuy').mockResolvedValue({
+      status: 'confirmed',
+      execution_type: 'fresh_curve',
+      signature: 'market-buy-signature',
+      explorer_url: 'https://explorer.solana.com/tx/market-buy-signature?cluster=devnet',
+      spent_usdc: '1000000',
+      received_tickets: '1989961',
+      lot_id: '42',
+      cash_balance: '24999000000'
+    });
+    const { container } = mountPanel(true);
+    const buyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('Market buy UP'));
+
+    await act(async () => {
+      buyButton?.click();
+    });
+
+    await vi.waitFor(() => {
+      expect(executeMarketBuySpy).toHaveBeenCalled();
+    });
+    const request = executeMarketBuySpy.mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      roundId: curve.round_id,
+      marketId: curve.market_id,
+      buyerWallet: authState.solanaWalletAddress,
+      side: 'UP',
+      usdcIn: '1000000',
+      accessToken: 'privy-access-token',
+      identityToken: 'privy-identity-token'
+    });
+    expect(request).not.toHaveProperty('walletSessionToken');
+    expect(authTokensMock.getAuthTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it('market buy continues without an identity token when Privy does not return one', async () => {
+    authState.identityToken = null;
+    authTokensMock.getAuthTokens.mockResolvedValue({
+      accessToken: 'privy-access-token',
+      identityToken: null
+    });
+    const market = liveMarket();
+    const curve = mockCurves[market.market_id];
+    const executeMarketBuySpy = vi.spyOn(api, 'executeMarketBuy').mockResolvedValue({
+      status: 'confirmed',
+      execution_type: 'fresh_curve',
+      signature: 'market-buy-signature',
+      explorer_url: 'https://explorer.solana.com/tx/market-buy-signature?cluster=devnet',
+      spent_usdc: '1000000',
+      received_tickets: '1989961',
+      lot_id: '42',
+      cash_balance: '24999000000'
+    });
+    const { container } = mountPanel(true);
+    const buyButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('Market buy UP'));
+
+    await act(async () => {
+      buyButton?.click();
+    });
+
+    await vi.waitFor(() => {
+      expect(executeMarketBuySpy).toHaveBeenCalled();
+    });
+    expect(executeMarketBuySpy.mock.calls[0]?.[0]).toMatchObject({
+      roundId: curve.round_id,
+      marketId: curve.market_id,
+      buyerWallet: authState.solanaWalletAddress,
+      side: 'UP',
+      usdcIn: '1000000',
+      accessToken: 'privy-access-token',
+      identityToken: null
+    });
+    expect(executeMarketBuySpy.mock.calls[0]?.[0]).not.toHaveProperty('walletSessionToken');
   });
 
   it('opens the order type dropdown without showing split', () => {
@@ -264,7 +347,7 @@ describe('MarketActionPanel', () => {
         marketId: mockCurves[liveMarket().market_id].market_id,
         roundId: mockCurves[liveMarket().market_id].round_id,
         accessToken: 'privy-access-token',
-        walletSessionToken: 'wallet-session-token'
+        identityToken: 'privy-identity-token'
       });
     });
     expect(clearSelectedAsk).toHaveBeenCalled();
@@ -368,7 +451,7 @@ describe('MarketActionPanel', () => {
         marketId: curve.market_id,
         roundId: curve.round_id,
         accessToken: 'privy-access-token',
-        walletSessionToken: 'wallet-session-token'
+        identityToken: 'privy-identity-token'
       });
     });
   });
@@ -442,7 +525,7 @@ describe('MarketActionPanel', () => {
         ticketId: ticket.ticket_id,
         claimerWallet: authState.solanaWalletAddress,
         accessToken: 'privy-access-token',
-        walletSessionToken: 'wallet-session-token'
+        identityToken: 'privy-identity-token'
       });
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-tickets', market.market_id, curve.round_id] });

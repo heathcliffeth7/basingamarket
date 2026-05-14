@@ -1,5 +1,5 @@
 use axum::http::{header, Method, StatusCode};
-use basingamarket_auth::{PrivyAccessTokenClaims, PrivyAuthConfig};
+use basingamarket_auth::{PrivyAccessTokenClaims, PrivyAuthConfig, PrivyIdentityTokenClaims};
 use basingamarket_db::{
     CashBidRow, CashProjectionSnapshot, CashResaleRow, CashTradeReservationRow, CashTradeRow,
     EventMeta, ProjectionEngine, TicketRow,
@@ -52,6 +52,7 @@ fn app_state() -> AppState {
         MemoryEventBus::default(),
     )
     .with_auth_config(None)
+    .with_privy_user_lookup(None)
 }
 
 fn ready_cash_chain_config() -> SolanaDevnetConfig {
@@ -93,6 +94,84 @@ fn valid_privy_token() -> String {
         &EncodingKey::from_ec_pem(test_es256_keys().signing_pem.as_bytes()).unwrap(),
     )
     .unwrap()
+}
+
+fn valid_privy_identity_token(wallet_address: &str) -> String {
+    valid_privy_identity_token_for_user(wallet_address, "did:privy:user-1")
+}
+
+fn valid_privy_identity_token_for_user(wallet_address: &str, user_id: &str) -> String {
+    let now = get_current_timestamp();
+    let linked_accounts = json!([
+        {
+            "type": "google_oauth",
+            "subject": "google-user"
+        },
+        {
+            "type": "wallet",
+            "address": wallet_address,
+            "chainType": "solana",
+            "walletClientType": "privy"
+        }
+    ]);
+    encode(
+        &Header::new(Algorithm::ES256),
+        &PrivyIdentityTokenClaims {
+            aud: TEST_APP_ID.to_owned(),
+            exp: now + 3600,
+            iat: now,
+            iss: "privy.io".to_owned(),
+            sub: user_id.to_owned(),
+            linked_accounts: Some(Value::String(linked_accounts.to_string())),
+        },
+        &EncodingKey::from_ec_pem(test_es256_keys().signing_pem.as_bytes()).unwrap(),
+    )
+    .unwrap()
+}
+
+fn privy_user_response(user_id: &str, linked_accounts: Value) -> Value {
+    json!({
+        "id": user_id,
+        "created_at": 1_700_000_000,
+        "linked_accounts": linked_accounts,
+        "mfa_methods": [],
+        "has_accepted_terms": true,
+        "is_guest": false
+    })
+}
+
+fn privy_user_with_solana_wallet(user_id: &str, wallet_address: &str) -> Value {
+    privy_user_response(
+        user_id,
+        json!([
+            {
+                "type": "google_oauth",
+                "subject": "google-user"
+            },
+            {
+                "type": "wallet",
+                "address": wallet_address,
+                "chain_type": "solana",
+                "walletClientType": "privy"
+            }
+        ]),
+    )
+}
+
+async fn privy_lookup_client(response: Value) -> PrivyUserLookupClient {
+    let app = Router::new().route(
+        "/v1/users/{user_id}",
+        get(move || {
+            let response = response.clone();
+            async move { Json(response) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    PrivyUserLookupClient::new(TEST_APP_ID, "test-secret", format!("http://{addr}")).unwrap()
 }
 
 struct EnvVarGuard {
@@ -888,10 +967,9 @@ async fn claim_ticket_credits_once_and_rejects_non_owner() {
     .await;
     let app = build_router(state.clone());
     let token = format!("Bearer {}", valid_privy_token());
-    let wrong_wallet_session = wallet_sessions::wallet_session_token_for_test(
-        "So11111111111111111111111111111111111111112",
-    );
-    let wallet_session = wallet_sessions::wallet_session_token_for_test(TEST_SOLANA_PUBKEY);
+    let wrong_identity_token =
+        valid_privy_identity_token("So11111111111111111111111111111111111111112");
+    let identity_token = valid_privy_identity_token(TEST_SOLANA_PUBKEY);
     let wrong_wallet_response = app
         .clone()
         .oneshot(
@@ -899,7 +977,7 @@ async fn claim_ticket_credits_once_and_rejects_non_owner() {
                 .method(Method::POST)
                 .uri("/tickets/90/claim")
                 .header(header::AUTHORIZATION, &token)
-                .header("x-bm-wallet-session", wrong_wallet_session)
+                .header("x-bm-identity-token", wrong_identity_token)
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({ "claimer_wallet": "So11111111111111111111111111111111111111112" })
@@ -919,7 +997,7 @@ async fn claim_ticket_credits_once_and_rejects_non_owner() {
                     .method(Method::POST)
                     .uri("/tickets/90/claim")
                     .header(header::AUTHORIZATION, &token)
-                    .header("x-bm-wallet-session", &wallet_session)
+                    .header("x-bm-identity-token", &identity_token)
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({ "claimer_wallet": TEST_SOLANA_PUBKEY }).to_string(),
@@ -934,6 +1012,54 @@ async fn claim_ticket_credits_once_and_rejects_non_owner() {
         assert_eq!(json["amount"], "40000000");
         assert_eq!(json["cash_balance"], "40000000");
     }
+}
+
+#[tokio::test]
+async fn claim_ticket_accepts_privy_user_lookup_without_identity_token() {
+    let round_id = 5_666_668;
+    let state = seeded_state_with_price(closed_price_header_for_round(round_id, 200_000_000))
+        .await
+        .with_auth_config(Some(test_auth_config()))
+        .with_privy_user_lookup(Some(
+            privy_lookup_client(privy_user_with_solana_wallet(
+                "did:privy:user-1",
+                TEST_SOLANA_PUBKEY,
+            ))
+            .await,
+        ));
+    seed_cash_ticket(
+        &state,
+        TEST_SOLANA_PUBKEY,
+        92,
+        round_id,
+        "UP",
+        20_000_000,
+        20_000_000,
+    )
+    .await;
+    let app = build_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/tickets/92/claim")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", valid_privy_token()),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "claimer_wallet": TEST_SOLANA_PUBKEY }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["status"], "claimed");
+    assert_eq!(json["cash_balance"], "20000000");
 }
 
 #[tokio::test]

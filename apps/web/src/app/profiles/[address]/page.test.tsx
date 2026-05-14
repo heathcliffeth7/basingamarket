@@ -13,12 +13,13 @@ const routeState = vi.hoisted(() => ({
 
 const authState = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
+  identityToken: 'privy-identity-token',
   solanaWalletAddress: 'EDo26t5QFmn7yEXQzKftxX5raiFaPwNx2YzkTuRQUVxV' as string | null
 }));
-const walletSessionMock = vi.hoisted(() => ({
-  getWalletSession: vi.fn(async () => ({
+const authTokensMock = vi.hoisted(() => ({
+  getAuthTokens: vi.fn(async () => ({
     accessToken: 'privy-access-token',
-    walletSessionToken: 'wallet-session-token'
+    identityToken: 'privy-identity-token'
   }))
 }));
 
@@ -42,11 +43,8 @@ vi.mock('next/link', () => ({
 }));
 
 vi.mock('@/lib/auth/privy', () => ({
-  useAuth: () => authState
-}));
-
-vi.mock('@/lib/auth/walletSession', () => ({
-  useWalletSession: () => walletSessionMock
+  useAuth: () => authState,
+  useProtectedAuthTokens: () => authTokensMock
 }));
 
 vi.mock('@/lib/api/client', () => ({
@@ -63,6 +61,12 @@ describe('ProfilePage claim activity', () => {
     routeState.address = owner;
     authState.solanaWalletAddress = owner;
     authState.getAccessToken.mockResolvedValue('privy-access-token');
+    authState.identityToken = 'privy-identity-token';
+    authTokensMock.getAuthTokens.mockClear();
+    authTokensMock.getAuthTokens.mockResolvedValue({
+      accessToken: 'privy-access-token',
+      identityToken: 'privy-identity-token'
+    });
     apiMock.getProfile.mockImplementation((address: string) => Promise.resolve({
       wallet_address: address,
       display_name: 'Signal Runner',
@@ -150,7 +154,7 @@ describe('ProfilePage claim activity', () => {
         ticketId: refundableTicket.ticket_id,
         claimerWallet: owner,
         accessToken: 'privy-access-token',
-        walletSessionToken: 'wallet-session-token'
+        identityToken: 'privy-identity-token'
       });
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['profile-positions', owner] });

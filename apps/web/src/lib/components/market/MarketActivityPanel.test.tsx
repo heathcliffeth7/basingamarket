@@ -20,6 +20,7 @@ const apiMock = vi.hoisted(() => ({
 const authMock = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   loginSolana: vi.fn(),
+  identityToken: 'privy-identity-token',
   walletAddress: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as string | null,
   solanaWalletAddress: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as string | null,
   solanaWallet: null,
@@ -27,10 +28,10 @@ const authMock = vi.hoisted(() => ({
   solanaWalletResolving: false,
   hasSolanaWallet: true
 }));
-const walletSessionMock = vi.hoisted(() => ({
-  getWalletSession: vi.fn(async () => ({
+const authTokensMock = vi.hoisted(() => ({
+  getAuthTokens: vi.fn(async () => ({
     accessToken: 'privy-access-token',
-    walletSessionToken: 'wallet-session-token'
+    identityToken: 'privy-identity-token'
   }))
 }));
 
@@ -42,11 +43,8 @@ vi.mock('@/lib/api/client', () => ({
 }));
 
 vi.mock('@/lib/auth/privy', () => ({
-  useAuth: () => authMock
-}));
-
-vi.mock('@/lib/auth/walletSession', () => ({
-  useWalletSession: () => walletSessionMock
+  useAuth: () => authMock,
+  useProtectedAuthTokens: () => authTokensMock
 }));
 
 const WALLET = mockWalletAddress;
@@ -59,6 +57,7 @@ describe('MarketActivityPanel', () => {
   beforeEach(() => {
     authMock.getAccessToken.mockResolvedValue('privy-access-token');
     authMock.loginSolana.mockResolvedValue(undefined);
+    authMock.identityToken = 'privy-identity-token';
     authMock.walletAddress = WALLET;
     authMock.solanaWalletAddress = WALLET;
     authMock.solanaWallet = null;
@@ -67,6 +66,11 @@ describe('MarketActivityPanel', () => {
     authMock.hasSolanaWallet = true;
     apiMock.getBids.mockResolvedValue(defaultBidBook());
     apiMock.getMarketTickets.mockResolvedValue(defaultTickets());
+    authTokensMock.getAuthTokens.mockClear();
+    authTokensMock.getAuthTokens.mockResolvedValue({
+      accessToken: 'privy-access-token',
+      identityToken: 'privy-identity-token'
+    });
     apiMock.cancelBid.mockResolvedValue({
       bid_id: 'bid-owned',
       market_id: MARKET_ID,
@@ -269,7 +273,7 @@ describe('MarketActivityPanel', () => {
       bidId: 'bid-owned',
       buyerWallet: WALLET,
       accessToken: 'privy-access-token',
-      walletSessionToken: 'wallet-session-token'
+      identityToken: 'privy-identity-token'
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['round-bids', ROUND_ID, MARKET_ID] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['round-orderbook', ROUND_ID, MARKET_ID] });
@@ -296,7 +300,7 @@ describe('MarketActivityPanel', () => {
       marketId: MARKET_ID,
       roundId: ROUND_ID,
       accessToken: 'privy-access-token',
-      walletSessionToken: 'wallet-session-token'
+      identityToken: 'privy-identity-token'
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-curve', MARKET_ID] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market', MARKET_ID] });
@@ -342,7 +346,7 @@ describe('MarketActivityPanel', () => {
       ticketId: 'won-position',
       claimerWallet: WALLET,
       accessToken: 'privy-access-token',
-      walletSessionToken: 'wallet-session-token'
+      identityToken: 'privy-identity-token'
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['market-tickets', MARKET_ID, ROUND_ID] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['ticket', 'won-position'] });

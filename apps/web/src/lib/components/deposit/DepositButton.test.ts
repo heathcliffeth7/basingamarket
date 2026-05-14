@@ -25,6 +25,7 @@ import {
 const authMock = vi.hoisted(() => ({
   authenticated: true,
   getAccessToken: vi.fn(async () => 'access-token'),
+  identityToken: 'identity-token',
   loginSolana: vi.fn(),
   solanaWallet: { address: 'Identity1111111111111111111111111111111111' },
   solanaWalletAddress: 'Identity1111111111111111111111111111111111',
@@ -33,10 +34,10 @@ const authMock = vi.hoisted(() => ({
 }));
 
 const signAndSendTransactionMock = vi.hoisted(() => vi.fn(async () => ({ signature: new Uint8Array([1, 2, 3]) })));
-const walletSessionMock = vi.hoisted(() => ({
-  getWalletSession: vi.fn(async () => ({
+const authTokensMock = vi.hoisted(() => ({
+  getAuthTokens: vi.fn(async () => ({
     accessToken: 'access-token',
-    walletSessionToken: 'wallet-session-token'
+    identityToken: 'identity-token'
   }))
 }));
 
@@ -65,11 +66,8 @@ const externalWalletMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/auth/privy', () => ({
-  useAuth: () => authMock
-}));
-
-vi.mock('@/lib/auth/walletSession', () => ({
-  useWalletSession: () => walletSessionMock
+  useAuth: () => authMock,
+  useProtectedAuthTokens: () => authTokensMock
 }));
 
 vi.mock('@privy-io/react-auth/solana', () => ({
@@ -291,7 +289,7 @@ describe('DepositButton setup state', () => {
       walletAddress: 'wallet',
       signature: 'signature',
       accessToken: 'token',
-      walletSessionToken: 'wallet-session-token',
+      identityToken: 'identity-token',
       verifyDeposit,
       retryDelaysMs: [25],
       sleep: async (ms) => {
@@ -301,10 +299,10 @@ describe('DepositButton setup state', () => {
         retryAttempts.push(attempt);
       }
     })).resolves.toEqual(credited);
-    expect(verifyDeposit).toHaveBeenLastCalledWith('wallet', 'signature', 'token', 'wallet-session-token');
+    expect(verifyDeposit).toHaveBeenLastCalledWith('wallet', 'signature', 'token', 'identity-token');
 
     expect(verifyDeposit).toHaveBeenCalledTimes(2);
-    expect(verifyDeposit).toHaveBeenNthCalledWith(1, 'wallet', 'signature', 'token', 'wallet-session-token');
+    expect(verifyDeposit).toHaveBeenNthCalledWith(1, 'wallet', 'signature', 'token', 'identity-token');
     expect(sleptMs).toEqual([25]);
     expect(retryAttempts).toEqual([1]);
   });

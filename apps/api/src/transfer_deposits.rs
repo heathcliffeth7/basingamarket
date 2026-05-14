@@ -49,7 +49,7 @@ pub(crate) async fn create_transfer_deposit_quote(
 ) -> Result<Json<TransferDepositQuoteResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let cash_amount = parse_cash_amount(&payload.cash_amount)?;
 
     match payload.asset {
@@ -66,7 +66,7 @@ pub(crate) async fn verify_transfer_deposit(
 ) -> Result<Json<TransferDepositVerificationResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let signature = payload.signature.trim().to_owned();
     if !is_valid_solana_signature(&signature) {
         return Err(ApiError::bad_request(

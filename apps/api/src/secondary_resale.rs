@@ -228,7 +228,7 @@ pub(crate) async fn list_ticket(
     Json(input): Json<ListTicketRequest>,
 ) -> Result<Json<ListingResponse>, ApiError> {
     let seller_wallet = normalize_wallet(&input.seller_wallet, "seller_wallet")?;
-    require_wallet_owner(&state, &headers, &seller_wallet)?;
+    require_wallet_owner(&state, &headers, &seller_wallet).await?;
     let price_per_ticket = parse_positive_u64(&input.price_per_ticket, "price_per_ticket")?;
     let context = lot_context(
         &state,
@@ -281,7 +281,7 @@ pub(crate) async fn cancel_listing(
     Json(input): Json<CancelListingRequest>,
 ) -> Result<Json<CancelListingResponse>, ApiError> {
     let seller_wallet = normalize_wallet(&input.seller_wallet, "seller_wallet")?;
-    require_wallet_owner(&state, &headers, &seller_wallet)?;
+    require_wallet_owner(&state, &headers, &seller_wallet).await?;
     let context = lot_context(
         &state,
         ticket_id,
@@ -332,7 +332,7 @@ pub(crate) async fn buy_listing(
     Json(input): Json<BuyListingRequest>,
 ) -> Result<Json<CashResaleResponse>, ApiError> {
     let buyer_wallet = normalize_wallet(&input.buyer_wallet, "buyer_wallet")?;
-    require_wallet_owner(&state, &headers, &buyer_wallet)?;
+    require_wallet_owner(&state, &headers, &buyer_wallet).await?;
     let max_price_per_ticket =
         parse_positive_u64(&input.max_price_per_ticket, "max_price_per_ticket")?;
     let execution = execute_buy_listing_internal(
@@ -473,7 +473,7 @@ pub(crate) async fn create_bid(
     Json(input): Json<CreateBidRequest>,
 ) -> Result<Json<CashBidResponse>, ApiError> {
     let buyer_wallet = normalize_wallet(&input.buyer_wallet, "buyer_wallet")?;
-    require_wallet_owner(&state, &headers, &buyer_wallet)?;
+    require_wallet_owner(&state, &headers, &buyer_wallet).await?;
     let market_id = input.market_id.unwrap_or(DEFAULT_MARKET_ID);
     ensure_round_live(&state, market_id, round_id).await?;
     let price_per_ticket = parse_positive_u128(&input.price_per_ticket, "price_per_ticket")?;
@@ -562,7 +562,7 @@ pub(crate) async fn cancel_bid(
     Json(input): Json<CancelBidRequest>,
 ) -> Result<Json<CashBidResponse>, ApiError> {
     let buyer_wallet = normalize_wallet(&input.buyer_wallet, "buyer_wallet")?;
-    require_wallet_owner(&state, &headers, &buyer_wallet)?;
+    require_wallet_owner(&state, &headers, &buyer_wallet).await?;
     let balance = state
         .store
         .cancel_cash_bid(&bid_id, &buyer_wallet)
@@ -590,7 +590,7 @@ pub(crate) async fn instant_sell(
     Json(input): Json<InstantSellRequest>,
 ) -> Result<Json<CashResaleResponse>, ApiError> {
     let seller_wallet = normalize_wallet(&input.seller_wallet, "seller_wallet")?;
-    require_wallet_owner(&state, &headers, &seller_wallet)?;
+    require_wallet_owner(&state, &headers, &seller_wallet).await?;
     let context = lot_context(
         &state,
         ticket_id,

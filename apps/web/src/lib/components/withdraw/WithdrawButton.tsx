@@ -6,8 +6,7 @@ import { useSignMessage } from '@privy-io/react-auth/solana';
 import { Loader2, Send, Wallet, X } from 'lucide-react';
 import { ApiClientError, api } from '@/lib/api/client';
 import { cashBalanceQueryKey, cashBalanceQueryOptions } from '@/lib/api/cashBalanceQuery';
-import { useAuth } from '@/lib/auth/privy';
-import { useWalletSession } from '@/lib/auth/walletSession';
+import { useAuth, useProtectedAuthTokens } from '@/lib/auth/privy';
 import Button from '@/lib/components/ui/Button';
 import ExternalWalletAccountConfirmation from '@/lib/components/wallet/ExternalWalletAccountConfirmation';
 import ExternalWalletSelector from '@/lib/components/wallet/ExternalWalletSelector';
@@ -27,7 +26,7 @@ type ExternalWalletSession = { address: string; walletName: string };
 export default function WithdrawButton({ walletAddress, renderTrigger, openRequest = 0 }: WithdrawButtonProps) {
   const queryClient = useQueryClient();
   const { loginSolana, solanaWallet, solanaWalletAddress, solanaWalletsReady, solanaWalletResolving, authenticated } = useAuth();
-  const { getWalletSession } = useWalletSession();
+  const { getAuthTokens } = useProtectedAuthTokens();
   const { signMessage } = useSignMessage();
   const externalWallet = useExternalWallet();
   const lastOpenRequestRef = useRef(0);
@@ -85,13 +84,13 @@ export default function WithdrawButton({ walletAddress, renderTrigger, openReque
         throw new Error('Bagli Solana wallet hesapla eslesmiyor.');
       }
 
-      const walletSession = await getWalletSession(activeWalletAddress!);
+      const authTokens = await getAuthTokens();
       const quote = await api.createWithdrawalQuote(
         activeWalletAddress!,
         baseUnits,
-        walletSession.accessToken,
+        authTokens.accessToken,
         destination,
-        walletSession.walletSessionToken
+        authTokens.identityToken
       );
       if (quote.status !== 'ready' || !quote.quote_id || !quote.message) {
         throw new Error(withdrawSetupMessage('quote_pending'));
@@ -112,8 +111,8 @@ export default function WithdrawButton({ walletAddress, renderTrigger, openReque
         activeWalletAddress!,
         quote.quote_id,
         encodeDepositSignature(signature),
-        walletSession.accessToken,
-        walletSession.walletSessionToken
+        authTokens.accessToken,
+        authTokens.identityToken
       );
     },
     onSuccess: (result) => {

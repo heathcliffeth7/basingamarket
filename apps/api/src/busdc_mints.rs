@@ -51,7 +51,7 @@ pub(crate) async fn mint_busdc(
 ) -> Result<Json<BusdcMintResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address gecersiz."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let now = Utc::now();
     let window = mint_window(now);
     let used_before = state

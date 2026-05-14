@@ -206,7 +206,7 @@ pub(crate) async fn execute_cash_buy(
 ) -> Result<Json<CashBuyResponse>, ApiError> {
     let buyer_wallet = normalize_base58_pubkey(&input.buyer_wallet, "buyer_wallet")
         .map_err(|_| ApiError::bad_request("invalid_buyer_wallet", "Buyer wallet gecersiz."))?;
-    require_wallet_owner(&state, &headers, &buyer_wallet)?;
+    require_wallet_owner(&state, &headers, &buyer_wallet).await?;
     execute_cash_buy_inner(&state, round_id, input)
         .await
         .map(Json)
@@ -220,7 +220,7 @@ pub(crate) async fn execute_market_buy(
 ) -> Result<Json<MarketBuyResponse>, ApiError> {
     let buyer_wallet = normalize_base58_pubkey(&input.buyer_wallet, "buyer_wallet")
         .map_err(|_| ApiError::bad_request("invalid_buyer_wallet", "Buyer wallet gecersiz."))?;
-    require_wallet_owner(&state, &headers, &buyer_wallet)?;
+    require_wallet_owner(&state, &headers, &buyer_wallet).await?;
     let usdc_in = parse_positive_u64(&input.usdc_in)?;
     let market_id = input.market_id.unwrap_or(DEFAULT_MARKET_ID);
     crate::secondary_resale::ensure_round_live(&state, market_id, round_id).await?;

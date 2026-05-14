@@ -64,7 +64,7 @@ pub(crate) async fn verify_profile_deposit(
 ) -> Result<Json<DepositVerificationResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let signature = payload.signature.trim().to_owned();
     if !is_valid_solana_signature(&signature) {
         return Err(ApiError::bad_request(
@@ -158,7 +158,7 @@ pub(crate) async fn get_sol_deposit_quote(
 ) -> Result<Json<SolDepositQuoteResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let cash_amount = query
         .cash_amount
         .trim()
@@ -245,7 +245,7 @@ pub(crate) async fn verify_profile_sol_deposit(
 ) -> Result<Json<SolDepositVerificationResponse>, ApiError> {
     let wallet_address = normalize_solana_pubkey(&address)
         .map_err(|_| ApiError::bad_request("invalid_address", "Wallet address is invalid."))?;
-    require_wallet_owner(&state, &headers, &wallet_address)?;
+    require_wallet_owner(&state, &headers, &wallet_address).await?;
     let signature = payload.signature.trim().to_owned();
     if !is_valid_solana_signature(&signature) {
         return Err(ApiError::bad_request(

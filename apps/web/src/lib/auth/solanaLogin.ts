@@ -32,7 +32,7 @@ export const solanaLoginMethodsAndOrder = {
   overflow: ['solflare', 'backpack', 'jupiter', 'wallet_connect_qr_solana']
 } satisfies NonNullable<PrivyClientConfig['loginMethodsAndOrder']>;
 
-export const solanaEmbeddedWalletCreateOnLogin = 'off' satisfies NonNullable<NonNullable<PrivyClientConfig['embeddedWallets']>['solana']>['createOnLogin'];
+export const solanaEmbeddedWalletCreateOnLogin = 'users-without-wallets' satisfies NonNullable<NonNullable<PrivyClientConfig['embeddedWallets']>['solana']>['createOnLogin'];
 
 export const solanaLoginModalOptions: LoginModalOptions = {
   walletChainType: 'solana-only'

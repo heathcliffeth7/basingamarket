@@ -127,9 +127,10 @@ export class ApiClientError extends Error {
   }
 }
 
-function authHeaders(accessToken?: string | null, walletSessionToken?: string | null): Record<string, string> {
+function authHeaders(accessToken?: string | null, identityToken?: string | null, walletSessionToken?: string | null): Record<string, string> {
   return {
     ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+    ...(identityToken ? { 'x-bm-identity-token': identityToken } : {}),
     ...(walletSessionToken ? { 'x-bm-wallet-session': walletSessionToken } : {})
   };
 }
@@ -298,16 +299,18 @@ export const api = {
     ticketId,
     claimerWallet,
     accessToken,
+    identityToken,
     walletSessionToken
   }: {
     ticketId: string;
     claimerWallet: string;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
   }): Promise<ClaimTicket> {
     return requestJson(`/tickets/${ticketId}/claim`, ClaimTicketSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({ claimer_wallet: claimerWallet })
     });
   },
@@ -319,6 +322,7 @@ export const api = {
     marketId,
     roundId,
     accessToken,
+    identityToken,
     walletSessionToken
   }: {
     ticketId: string;
@@ -327,11 +331,12 @@ export const api = {
     marketId?: string | number | null;
     roundId?: string | number | null;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
   }): Promise<ListingResponse> {
     return requestJson(`/tickets/${ticketId}/list`, ListingResponseSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         seller_wallet: sellerWallet,
         price_per_ticket: pricePerTicket,
@@ -347,6 +352,7 @@ export const api = {
     marketId,
     roundId,
     accessToken,
+    identityToken,
     walletSessionToken
   }: {
     ticketId: string;
@@ -354,11 +360,12 @@ export const api = {
     marketId?: string | number | null;
     roundId?: string | number | null;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
   }): Promise<CancelListingResponse> {
     return requestJson(`/tickets/${ticketId}/cancel-listing`, CancelListingResponseSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         seller_wallet: sellerWallet,
         ...(marketId ? { market_id: Number(marketId) } : {}),
@@ -374,6 +381,7 @@ export const api = {
     marketId,
     roundId,
     accessToken,
+    identityToken,
     walletSessionToken
   }: {
     ticketId: string;
@@ -382,11 +390,12 @@ export const api = {
     marketId?: string | number | null;
     roundId?: string | number | null;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
   }): Promise<CashResale> {
     return requestJson(`/tickets/${ticketId}/buy-listing`, CashResaleSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         buyer_wallet: buyerWallet,
         max_price_per_ticket: maxPricePerTicket,
@@ -426,6 +435,7 @@ export const api = {
     pricePerTicket,
     maxUsdc,
     accessToken,
+    identityToken,
     walletSessionToken
   }: {
     roundId: string;
@@ -435,11 +445,12 @@ export const api = {
     pricePerTicket: string;
     maxUsdc: string;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
   }): Promise<CashBid> {
     return requestJson(`/rounds/${roundId}/bids`, CashBidSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         market_id: Number(marketId),
         buyer_wallet: buyerWallet,
@@ -455,17 +466,19 @@ export const api = {
     bidId,
     buyerWallet,
     accessToken,
+    identityToken,
     walletSessionToken
   }: {
     roundId: string;
     bidId: string;
     buyerWallet: string;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
   }): Promise<CashBid> {
     return requestJson(`/rounds/${roundId}/bids/${bidId}`, CashBidSchema, {
       method: 'DELETE',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({ buyer_wallet: buyerWallet })
     });
   },
@@ -477,6 +490,7 @@ export const api = {
     roundId,
     minPricePerTicket,
     accessToken,
+    identityToken,
     walletSessionToken
   }: {
     ticketId: string;
@@ -485,11 +499,12 @@ export const api = {
     roundId?: string | number | null;
     minPricePerTicket?: string | null;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
   }): Promise<CashResale> {
     return requestJson(`/tickets/${ticketId}/instant-sell`, CashResaleSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         seller_wallet: sellerWallet,
         ...(marketId ? { market_id: Number(marketId) } : {}),
@@ -544,6 +559,7 @@ export const api = {
     side,
     usdcIn,
     accessToken,
+    identityToken,
     walletSessionToken,
     slippageBps = 100,
     roundRetryAttempts,
@@ -556,6 +572,7 @@ export const api = {
     side: 'UP' | 'DOWN';
     usdcIn: string;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
     slippageBps?: number;
     roundRetryAttempts?: number;
@@ -565,7 +582,7 @@ export const api = {
     const path = `/rounds/${roundId}/cash-buy`;
     return withDevnetRoundRetry(() => requestJson(path, CashBuySchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         market_id: Number(marketId),
         buyer_wallet: buyerWallet,
@@ -587,6 +604,7 @@ export const api = {
     side,
     usdcIn,
     accessToken,
+    identityToken,
     walletSessionToken,
     slippageBps = 100,
     roundRetryAttempts,
@@ -599,6 +617,7 @@ export const api = {
     side: 'UP' | 'DOWN';
     usdcIn: string;
     accessToken?: string | null;
+    identityToken?: string | null;
     walletSessionToken?: string | null;
     slippageBps?: number;
     roundRetryAttempts?: number;
@@ -608,7 +627,7 @@ export const api = {
     const path = `/rounds/${roundId}/market-buy`;
     return withDevnetRoundRetry(() => requestJson(path, MarketBuySchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         market_id: Number(marketId),
         buyer_wallet: buyerWallet,
@@ -696,10 +715,10 @@ export const api = {
     return requestJson(`/profiles/${address}/busdc-mint-status`, BusdcMintStatusSchema);
   },
 
-  mintBusdc(address: string, accessToken?: string | null, walletSessionToken?: string | null): Promise<BusdcMint> {
+  mintBusdc(address: string, accessToken?: string | null, identityToken?: string | null, walletSessionToken?: string | null): Promise<BusdcMint> {
     return requestJson(`/profiles/${address}/busdc-mints`, BusdcMintSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken)
+      headers: authHeaders(accessToken, identityToken, walletSessionToken)
     });
   },
 
@@ -711,18 +730,18 @@ export const api = {
     return requestJson('/deposit/liquidity', DepositLiquiditySchema);
   },
 
-  verifyDeposit(address: string, signature: string, accessToken?: string | null, walletSessionToken?: string | null): Promise<DepositVerification> {
+  verifyDeposit(address: string, signature: string, accessToken?: string | null, identityToken?: string | null, walletSessionToken?: string | null): Promise<DepositVerification> {
     return requestJson(`/profiles/${address}/deposits`, DepositVerificationSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({ signature })
     });
   },
 
-  getSolDepositQuote(address: string, cashAmount: string, accessToken?: string | null, walletSessionToken?: string | null): Promise<SolDepositQuote> {
+  getSolDepositQuote(address: string, cashAmount: string, accessToken?: string | null, identityToken?: string | null, walletSessionToken?: string | null): Promise<SolDepositQuote> {
     const search = new URLSearchParams({ cash_amount: cashAmount });
     return requestJson(`/profiles/${address}/sol-deposit-quote?${search.toString()}`, SolDepositQuoteSchema, {
-      headers: authHeaders(accessToken, walletSessionToken)
+      headers: authHeaders(accessToken, identityToken, walletSessionToken)
     });
   },
 
@@ -731,11 +750,12 @@ export const api = {
     quoteId: string,
     signature: string,
     accessToken?: string | null,
+    identityToken?: string | null,
     walletSessionToken?: string | null
   ): Promise<SolDepositVerification> {
     return requestJson(`/profiles/${address}/sol-deposits`, SolDepositVerificationSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({ quote_id: quoteId, signature })
     });
   },
@@ -745,11 +765,12 @@ export const api = {
     asset: TransferDepositAsset,
     cashAmount: string,
     accessToken?: string | null,
+    identityToken?: string | null,
     walletSessionToken?: string | null
   ): Promise<TransferDepositQuote> {
     return requestJson(`/profiles/${address}/transfer-deposit-quotes`, TransferDepositQuoteSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({ asset, cash_amount: cashAmount })
     });
   },
@@ -759,11 +780,12 @@ export const api = {
     quoteId: string | null | undefined,
     signature: string,
     accessToken?: string | null,
+    identityToken?: string | null,
     walletSessionToken?: string | null
   ): Promise<TransferDepositVerification> {
     return requestJson(`/profiles/${address}/transfer-deposits`, TransferDepositVerificationSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         ...(quoteId ? { quote_id: quoteId } : {}),
         signature
@@ -780,11 +802,12 @@ export const api = {
     cashAmount: string,
     accessToken?: string | null,
     destination?: string | null,
+    identityToken?: string | null,
     walletSessionToken?: string | null
   ): Promise<WithdrawalQuote> {
     return requestJson(`/profiles/${address}/withdrawal-quotes`, WithdrawalQuoteSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({
         cash_amount: cashAmount,
         ...(destination ? { destination } : {})
@@ -797,11 +820,12 @@ export const api = {
     quoteId: string,
     userSignature: string,
     accessToken?: string | null,
+    identityToken?: string | null,
     walletSessionToken?: string | null
   ): Promise<WithdrawalVerification> {
     return requestJson(`/profiles/${address}/withdrawals`, WithdrawalVerificationSchema, {
       method: 'POST',
-      headers: authHeaders(accessToken, walletSessionToken),
+      headers: authHeaders(accessToken, identityToken, walletSessionToken),
       body: JSON.stringify({ quote_id: quoteId, user_signature: userSignature })
     });
   },

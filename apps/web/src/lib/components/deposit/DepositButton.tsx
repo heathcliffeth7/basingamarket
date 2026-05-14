@@ -27,8 +27,7 @@ import { ApiClientError, api } from '@/lib/api/client';
 import { cashBalanceQueryKey, cashBalanceQueryOptions } from '@/lib/api/cashBalanceQuery';
 import { solanaRpcUrl } from '@/lib/api/env';
 import type { DepositConfig, DepositVerification, TransferDepositAsset, TransferDepositQuote, SolDepositQuote } from '@/lib/api/types';
-import { useAuth } from '@/lib/auth/privy';
-import { useWalletSession } from '@/lib/auth/walletSession';
+import { useAuth, useProtectedAuthTokens } from '@/lib/auth/privy';
 import Button from '@/lib/components/ui/Button';
 import ExternalWalletAccountConfirmation from '@/lib/components/wallet/ExternalWalletAccountConfirmation';
 import ExternalWalletSelector from '@/lib/components/wallet/ExternalWalletSelector';
@@ -54,7 +53,7 @@ const DEPOSIT_VERIFY_RETRY_DELAYS_MS = [1200, 1800, 2500];
 export default function DepositButton({ walletAddress, renderTrigger, openRequest = 0 }: DepositButtonProps) {
   const queryClient = useQueryClient();
   const { loginSolana, solanaWallet, solanaWalletAddress, solanaWalletsReady, solanaWalletResolving, authenticated } = useAuth();
-  const { getWalletSession } = useWalletSession();
+  const { getAuthTokens } = useProtectedAuthTokens();
   const { signAndSendTransaction } = useSignAndSendTransaction();
   const externalWallet = useExternalWallet();
   const lastOpenRequestRef = useRef(0);
@@ -125,12 +124,12 @@ export default function DepositButton({ walletAddress, renderTrigger, openReques
         throw new Error('Solana wallet unavailable');
       }
       if (pendingWalletDepositSignature) {
-        const walletSession = await getWalletSession(activeWalletAddress);
+        const authTokens = await getAuthTokens();
         return verifyDepositWithRetry({
           walletAddress: activeWalletAddress,
           signature: pendingWalletDepositSignature,
-          accessToken: walletSession.accessToken,
-          walletSessionToken: walletSession.walletSessionToken,
+          accessToken: authTokens.accessToken,
+          identityToken: authTokens.identityToken,
           onRetry: () => setMessage('Waiting for devnet confirmation; verifying again...')
         });
       }
@@ -155,23 +154,23 @@ export default function DepositButton({ walletAddress, renderTrigger, openReques
             }
           }
         });
-        const walletSession = await getWalletSession(activeWalletAddress);
+        const authTokens = await getAuthTokens();
         const encodedSignature = encodeDepositSignature(signature);
         setPendingWalletDepositSignature(encodedSignature);
         return verifyDepositWithRetry({
           walletAddress: activeWalletAddress,
           signature: encodedSignature,
-          accessToken: walletSession.accessToken,
-          walletSessionToken: walletSession.walletSessionToken,
+          accessToken: authTokens.accessToken,
+          identityToken: authTokens.identityToken,
           onRetry: () => setMessage('Waiting for devnet confirmation; verifying again...')
         });
       }
-      const walletSession = await getWalletSession(activeWalletAddress);
+      const authTokens = await getAuthTokens();
       const quote = await api.getSolDepositQuote(
         activeWalletAddress,
         baseUnits,
-        walletSession.accessToken,
-        walletSession.walletSessionToken
+        authTokens.accessToken,
+        authTokens.identityToken
       );
       if (!isReadySolDepositQuote(quote)) {
         throw new Error(solDepositQuoteMessage(quote, config));
@@ -195,8 +194,8 @@ export default function DepositButton({ walletAddress, renderTrigger, openReques
         walletAddress: activeWalletAddress,
         quoteId: quote.quote_id,
         signature: encodeDepositSignature(signature),
-        accessToken: walletSession.accessToken,
-        walletSessionToken: walletSession.walletSessionToken,
+        accessToken: authTokens.accessToken,
+        identityToken: authTokens.identityToken,
         onRetry: () => setMessage('Waiting for devnet confirmation; verifying again...')
       });
     },
@@ -225,13 +224,13 @@ export default function DepositButton({ walletAddress, renderTrigger, openReques
       if (!baseUnits) {
         throw new Error('Invalid amount');
       }
-      const walletSession = await getWalletSession(activeWalletAddress);
+      const authTokens = await getAuthTokens();
       return api.createTransferDepositQuote(
         activeWalletAddress,
         asset,
         baseUnits,
-        walletSession.accessToken,
-        walletSession.walletSessionToken
+        authTokens.accessToken,
+        authTokens.identityToken
       );
     },
     onSuccess: (quote) => {
@@ -255,13 +254,13 @@ export default function DepositButton({ walletAddress, renderTrigger, openReques
       setMessage('Transaction sent, waiting for Solana confirmation...');
       await waitForSignatureConfirmation({ signature });
       setMessage('Transaction confirmed. Crediting BUSDC...');
-      const walletSession = await getWalletSession(activeWalletAddress);
+      const authTokens = await getAuthTokens();
       return api.verifyTransferDeposit(
         activeWalletAddress,
         transferQuote?.quote_id ?? null,
         signature,
-        walletSession.accessToken,
-        walletSession.walletSessionToken
+        authTokens.accessToken,
+        authTokens.identityToken
       );
     },
     onSuccess: (result) => {
@@ -304,13 +303,13 @@ export default function DepositButton({ walletAddress, renderTrigger, openReques
       if (!baseUnits) {
         throw new Error('Invalid amount');
       }
-      const walletSession = await getWalletSession(activeWalletAddress);
+      const authTokens = await getAuthTokens();
       const quote = await api.createTransferDepositQuote(
         activeWalletAddress,
         asset,
         baseUnits,
-        walletSession.accessToken,
-        walletSession.walletSessionToken
+        authTokens.accessToken,
+        authTokens.identityToken
       );
       if (!transferQuoteReady(quote)) {
         throw new Error(manualTransferQuoteMessage(quote, config));
@@ -335,8 +334,8 @@ export default function DepositButton({ walletAddress, renderTrigger, openReques
         activeWalletAddress,
         quote.quote_id!,
         signature,
-        walletSession.accessToken,
-        walletSession.walletSessionToken
+        authTokens.accessToken,
+        authTokens.identityToken
       );
     },
     onSuccess: (result) => {
@@ -367,13 +366,13 @@ export default function DepositButton({ walletAddress, renderTrigger, openReques
       setMessage('Transaction sent, waiting for Solana confirmation...');
       await waitForSignatureConfirmation({ signature: matchingPendingExternalDeposit.signature });
       setMessage('Transaction confirmed. Crediting BUSDC...');
-      const walletSession = await getWalletSession(activeWalletAddress);
+      const authTokens = await getAuthTokens();
       return api.verifyTransferDeposit(
         activeWalletAddress,
         matchingPendingExternalDeposit.quoteId,
         matchingPendingExternalDeposit.signature,
-        walletSession.accessToken,
-        walletSession.walletSessionToken
+        authTokens.accessToken,
+        authTokens.identityToken
       );
     },
     onSuccess: (result) => {
@@ -1322,19 +1321,19 @@ async function verifySolDepositWithRetry({
   quoteId,
   signature,
   accessToken,
-  walletSessionToken,
+  identityToken,
   onRetry
 }: {
   walletAddress: string;
   quoteId: string;
   signature: string;
   accessToken?: string | null;
-  walletSessionToken?: string | null;
+  identityToken?: string | null;
   onRetry?: (attempt: number, error: ApiClientError) => void;
 }) {
   for (let attempt = 0; attempt <= DEPOSIT_VERIFY_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      return await api.verifySolDeposit(walletAddress, quoteId, signature, accessToken, walletSessionToken);
+      return await api.verifySolDeposit(walletAddress, quoteId, signature, accessToken, identityToken);
     } catch (error) {
       if (
         !isTransientDepositVerifyError(error)
@@ -1352,7 +1351,7 @@ export async function verifyDepositWithRetry({
   walletAddress,
   signature,
   accessToken,
-  walletSessionToken,
+  identityToken,
   onRetry,
   verifyDeposit = api.verifyDeposit,
   retryDelaysMs = DEPOSIT_VERIFY_RETRY_DELAYS_MS,
@@ -1361,15 +1360,15 @@ export async function verifyDepositWithRetry({
   walletAddress: string;
   signature: string;
   accessToken?: string | null;
-  walletSessionToken?: string | null;
+  identityToken?: string | null;
   onRetry?: (attempt: number, error: ApiClientError) => void;
-  verifyDeposit?: (address: string, signature: string, accessToken?: string | null, walletSessionToken?: string | null) => Promise<DepositVerification>;
+  verifyDeposit?: (address: string, signature: string, accessToken?: string | null, identityToken?: string | null) => Promise<DepositVerification>;
   retryDelaysMs?: number[];
   sleep?: (ms: number) => Promise<void>;
 }) {
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
     try {
-      return await verifyDeposit(walletAddress, signature, accessToken, walletSessionToken);
+      return await verifyDeposit(walletAddress, signature, accessToken, identityToken);
     } catch (error) {
       if (
         !isTransientDepositVerifyError(error)
