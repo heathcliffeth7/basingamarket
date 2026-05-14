@@ -280,7 +280,7 @@ fn wallet_session_header(headers: &HeaderMap) -> Result<&str, ApiError> {
 
 fn wallet_session_secret() -> Result<String, ApiError> {
     match std::env::var(WALLET_SESSION_SECRET_ENV) {
-        Ok(secret) if secret.as_bytes().len() >= 32 => Ok(secret),
+        Ok(secret) if secret.len() >= 32 => Ok(secret),
         Ok(_) => Err(wallet_session_unconfigured()),
         Err(_) => test_wallet_session_secret(),
     }
