@@ -12,11 +12,12 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
 pub mod topics {
     pub const MARKET_UPDATED: &str = "market.updated";
+    pub const MARKET_CURVE_UPDATED: &str = "market.curve.updated";
     pub const TICKET_CREATED: &str = "ticket.created";
     pub const TICKET_LISTED: &str = "ticket.listed";
     pub const TICKET_SOLD: &str = "ticket.sold";
@@ -100,12 +101,27 @@ pub struct PublishedEvent {
     pub envelope: EventEnvelope,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MemoryEventBus {
     events: Arc<RwLock<Vec<PublishedEvent>>>,
+    live_events: broadcast::Sender<PublishedEvent>,
+}
+
+impl Default for MemoryEventBus {
+    fn default() -> Self {
+        let (live_events, _) = broadcast::channel(1024);
+        Self {
+            events: Arc::new(RwLock::new(Vec::new())),
+            live_events,
+        }
+    }
 }
 
 impl MemoryEventBus {
+    pub fn subscribe(&self) -> broadcast::Receiver<PublishedEvent> {
+        self.live_events.subscribe()
+    }
+
     pub async fn events(&self) -> Vec<PublishedEvent> {
         self.events.read().await.clone()
     }
@@ -124,10 +140,12 @@ impl MemoryEventBus {
 #[async_trait]
 impl EventPublisher for MemoryEventBus {
     async fn publish(&self, topic: &str, envelope: EventEnvelope) -> Result<(), RealtimeError> {
-        self.events.write().await.push(PublishedEvent {
+        let event = PublishedEvent {
             topic: topic.to_owned(),
             envelope,
-        });
+        };
+        self.events.write().await.push(event.clone());
+        let _ = self.live_events.send(event);
         Ok(())
     }
 }
@@ -262,6 +280,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(bus.events_for_topic(topics::TICKET_LISTED).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn memory_bus_broadcasts_live_events_to_subscribers() {
+        let bus = MemoryEventBus::default();
+        let mut subscriber = bus.subscribe();
+
+        bus.publish(
+            topics::MARKET_CURVE_UPDATED,
+            EventEnvelope::new(
+                topics::MARKET_CURVE_UPDATED,
+                serde_json::json!({"market_id": 1}),
+            )
+            .with_market(1),
+        )
+        .await
+        .unwrap();
+
+        let event = subscriber.recv().await.unwrap();
+        assert_eq!(event.topic, topics::MARKET_CURVE_UPDATED);
+        assert_eq!(event.envelope.market_id, Some(1));
     }
 
     #[tokio::test]

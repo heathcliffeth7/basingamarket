@@ -21,15 +21,15 @@ mod sol_deposit_price;
 mod trade_intent;
 mod transfer_deposits;
 mod wallet_sessions;
+mod websocket;
 mod withdrawals;
 
 use axum::{
     body::Body,
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, Request},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -76,6 +76,7 @@ pub struct AppState {
     pub(crate) wallet_challenges: wallet_sessions::WalletChallengeStore,
     pub(crate) busdc_reserve_backer: BusdcReserveBacker,
     pub(crate) devnet_round_bootstrap_requests: devnet_round_bootstrap::DevnetRoundBootstrapQueue,
+    market_ws_sequences: Arc<tokio::sync::RwLock<HashMap<u64, u64>>>,
     projection_store_path: Option<Arc<PathBuf>>,
 }
 
@@ -103,6 +104,7 @@ impl AppState {
             busdc_reserve_backer: BusdcReserveBacker::Script,
             devnet_round_bootstrap_requests:
                 devnet_round_bootstrap::DevnetRoundBootstrapQueue::default(),
+            market_ws_sequences: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             projection_store_path: None,
         }
     }
@@ -158,6 +160,24 @@ impl AppState {
                 .map_err(ApiError::internal)?;
         }
         Ok(())
+    }
+
+    pub(crate) async fn current_market_ws_sequence(&self, market_id: u64) -> u64 {
+        let base = self.store.indexer_cursor().await.unwrap_or(0);
+        self.market_ws_sequences
+            .read()
+            .await
+            .get(&market_id)
+            .copied()
+            .unwrap_or(base)
+    }
+
+    pub(crate) async fn next_market_ws_sequence(&self, market_id: u64) -> u64 {
+        let base = self.store.indexer_cursor().await.unwrap_or(0);
+        let mut sequences = self.market_ws_sequences.write().await;
+        let sequence = sequences.entry(market_id).or_insert(base);
+        *sequence = sequence.saturating_add(1);
+        *sequence
     }
 }
 
@@ -390,7 +410,8 @@ pub fn build_router(state: AppState) -> Router {
             get(profile_activity::get_profile_activity),
         )
         .route("/profiles/{address}", get(get_profile))
-        .route("/ws/markets/{id}", get(ws_market))
+        .route("/ws/markets", get(websocket::ws_markets))
+        .route("/ws/markets/{id}", get(websocket::ws_market))
         .layer(http_config::cors_layer())
         .layer(middleware::from_fn(add_request_id))
         .with_state(state)
@@ -420,9 +441,9 @@ async fn list_markets(State(state): State<AppState>) -> Result<Json<Value>, ApiE
     }
 
     let markets = state.store.list_markets().await;
-    let market_sequence = state.store.indexer_cursor().await.unwrap_or(0);
     let mut response = Vec::with_capacity(markets.len());
     for market in markets {
+        let market_sequence = state.current_market_ws_sequence(market.market_id).await;
         let outcomes = state.store.get_outcomes(market.market_id).await;
         response.push(market_response_from_rows(&state, market, outcomes, market_sequence).await);
     }
@@ -451,10 +472,9 @@ async fn get_market(
         .ok_or_else(|| ApiError::not_found("market_not_found", "Market bulunamadi."))?;
     let outcomes = state.store.get_outcomes(id).await;
     let market_sequence = state
-        .store
-        .indexer_cursor()
+        .current_market_ws_sequence(id)
         .await
-        .unwrap_or(market.created_slot);
+        .max(market.created_slot);
     let response = market_response_from_rows(&state, market, outcomes, market_sequence).await;
     let value = serde_json::to_value(response).map_err(ApiError::internal)?;
     state.cache.set_json(cache_key, value.clone(), 10).await;
@@ -825,21 +845,6 @@ async fn get_profile_cash(
         cash_balance,
         state.chain_config.deposit_status() == "ready",
     )))
-}
-
-async fn ws_market(Path(id): Path<u64>, ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, id))
-}
-
-async fn handle_socket(mut socket: WebSocket, market_id: u64) {
-    let message = json!({
-        "market_id": market_id.to_string(),
-        "sequence": 0,
-        "canvas_version": 0,
-        "type": "canvas_updated",
-        "payload": { "ready": true }
-    });
-    let _ = socket.send(Message::Text(message.to_string().into())).await;
 }
 
 fn require_privy_session(

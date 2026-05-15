@@ -8,7 +8,7 @@ use basingamarket_domain::{
 };
 
 const PHASE_ONE_PROTOCOL_MARKET_TRADE_UNTIL: u64 = 4_102_444_800;
-const PHASE_ONE_PROTOCOL_MARKET_CURSOR_SLOT: u64 = 13;
+const PHASE_ONE_PROTOCOL_MARKET_CURSOR_SLOT: u64 = 15;
 const EVEN_ODDS: u128 = 500_000;
 
 pub async fn seed_phase_one_protocol_markets(

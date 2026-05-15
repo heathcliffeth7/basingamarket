@@ -427,6 +427,41 @@ async fn seed_cash_ticket(
 }
 
 #[tokio::test]
+async fn market_curve_update_websocket_event_includes_cash_curve_volume() {
+    let round_id = 5_666_667;
+    let state = seeded_state_with_price(price_header_fixture("live")).await;
+    seed_cash_ticket(
+        &state,
+        TEST_SOLANA_PUBKEY,
+        99,
+        round_id,
+        "UP",
+        995_000,
+        1_900_000,
+    )
+    .await;
+    let mut subscriber = state.bus.subscribe();
+
+    websocket::publish_market_curve_updated(&state, 1, round_id)
+        .await
+        .unwrap();
+
+    let event = subscriber.recv().await.unwrap();
+    assert_eq!(
+        event.topic,
+        basingamarket_realtime::topics::MARKET_CURVE_UPDATED
+    );
+    let message = event.envelope.payload;
+    assert_eq!(message["market_id"], "1");
+    assert_eq!(message["type"], "market_curve_updated");
+    assert_eq!(message["payload"]["round_id"], round_id.to_string());
+    let sides = message["payload"]["curve"]["sides"].as_array().unwrap();
+    let up = sides.iter().find(|side| side["side"] == "UP").unwrap();
+    assert_eq!(up["volume"], "995000");
+    assert!(up["market_cap"].as_str().unwrap().parse::<u128>().unwrap() > 0);
+}
+
+#[tokio::test]
 async fn orderbook_groups_active_bids_and_listed_asks_by_side() {
     let state = seeded_state().await;
     let engine = ProjectionEngine::new(state.store.clone());
@@ -1078,13 +1113,15 @@ async fn markets_empty_db_seeds_phase_one_protocol_markets() {
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     let markets = json.as_array().unwrap();
-    assert_eq!(markets.len(), 6);
+    assert_eq!(markets.len(), 8);
     assert_eq!(markets[0]["question_hash"], "BTC 5m Crypto Round");
     assert_eq!(markets[1]["question_hash"], "ETH 5m Crypto Round");
     assert_eq!(markets[2]["question_hash"], "SOL 5m Crypto Round");
     assert_eq!(markets[3]["question_hash"], "BTC 1m Crypto Round");
     assert_eq!(markets[4]["question_hash"], "ETH 1m Crypto Round");
     assert_eq!(markets[5]["question_hash"], "SOL 1m Crypto Round");
+    assert_eq!(markets[6]["question_hash"], "DOGE 5m Crypto Round");
+    assert_eq!(markets[7]["question_hash"], "DOGE 1m Crypto Round");
 }
 
 #[tokio::test]
@@ -1238,8 +1275,8 @@ async fn canvas_reads_projection_without_raw_replay() {
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["market_id"], "1");
-    assert_eq!(json["market_sequence"], 13);
-    assert_eq!(json["canvas_version"], 13);
+    assert_eq!(json["market_sequence"], 15);
+    assert_eq!(json["canvas_version"], 15);
     assert_eq!(json["width"], 1200);
     assert_eq!(json["height"], 630);
     assert_eq!(json["regions"][0]["outcome_id"], "0");

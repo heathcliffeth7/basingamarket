@@ -434,6 +434,7 @@ mod tests {
         assert_eq!(binance_symbol_for_asset(Asset::Btc).unwrap(), "BTCUSDT");
         assert_eq!(binance_symbol_for_asset(Asset::Eth).unwrap(), "ETHUSDT");
         assert_eq!(binance_symbol_for_asset(Asset::Sol).unwrap(), "SOLUSDT");
+        assert_eq!(binance_symbol_for_asset(Asset::Doge).unwrap(), "DOGEUSDT");
     }
 
     #[test]

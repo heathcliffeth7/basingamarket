@@ -357,6 +357,16 @@ async fn execute_cash_buy_inner(
         .map_err(ApiError::internal)?;
     if recorded {
         state.persist_cash_projection().await?;
+        state.cache.flush().await;
+        if let Err(error) =
+            crate::websocket::publish_market_curve_updated(state, prepared.market_id, round_id)
+                .await
+        {
+            tracing::warn!(
+                error = error.code,
+                "failed to publish market curve websocket update"
+            );
+        }
     }
 
     Ok(CashBuyResponse {

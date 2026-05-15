@@ -170,7 +170,7 @@ async fn empty_store_lists_seeded_phase_one_crypto_markets() {
     }
 
     let markets = json.as_array().unwrap();
-    assert_eq!(markets.len(), 6);
+    assert_eq!(markets.len(), 8);
     assert_eq!(markets[0]["market_id"], "1");
     assert_eq!(markets[0]["question_hash"], "BTC 5m Crypto Round");
     assert_eq!(markets[1]["question_hash"], "ETH 5m Crypto Round");
@@ -179,8 +179,12 @@ async fn empty_store_lists_seeded_phase_one_crypto_markets() {
     assert_eq!(markets[3]["question_hash"], "BTC 1m Crypto Round");
     assert_eq!(markets[4]["question_hash"], "ETH 1m Crypto Round");
     assert_eq!(markets[5]["question_hash"], "SOL 1m Crypto Round");
+    assert_eq!(markets[6]["market_id"], "14");
+    assert_eq!(markets[6]["question_hash"], "DOGE 5m Crypto Round");
+    assert_eq!(markets[7]["market_id"], "15");
+    assert_eq!(markets[7]["question_hash"], "DOGE 1m Crypto Round");
     assert!(markets.iter().all(|market| market["status"] == "open"));
-    assert!(markets.iter().all(|market| market["market_sequence"] == 13));
+    assert!(markets.iter().all(|market| market["market_sequence"] == 15));
 
     for market in markets {
         let outcomes = market["outcomes"].as_array().unwrap();

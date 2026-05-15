@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Limits => {
             println!("solana_devnet_only=true");
-            println!("max_open_markets=13");
+            println!("max_open_markets=14");
             println!("max_market_stake_units=1000000000");
             println!("admin_create_resolve_required=true");
         }

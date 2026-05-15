@@ -286,20 +286,24 @@ fn buy_slippage_min_tickets_fail() {
 }
 
 #[test]
-fn default_phase_one_streams_are_btc_eth_sol_5m_and_1m() {
+fn default_phase_one_streams_are_btc_eth_sol_doge_5m_and_1m() {
     let streams = protocol_streams_for_phase(1).unwrap();
 
-    assert_eq!(streams.len(), 6);
+    assert_eq!(streams.len(), 8);
     assert_eq!(streams[0].asset, Asset::Btc);
     assert_eq!(streams[1].asset, Asset::Eth);
     assert_eq!(streams[2].asset, Asset::Sol);
-    assert_eq!(streams[3].asset, Asset::Btc);
-    assert_eq!(streams[4].asset, Asset::Eth);
-    assert_eq!(streams[5].asset, Asset::Sol);
-    assert!(streams[..3]
+    assert_eq!(streams[3].asset, Asset::Doge);
+    assert_eq!(streams[3].market_id, 14);
+    assert_eq!(streams[4].asset, Asset::Btc);
+    assert_eq!(streams[5].asset, Asset::Eth);
+    assert_eq!(streams[6].asset, Asset::Sol);
+    assert_eq!(streams[7].asset, Asset::Doge);
+    assert_eq!(streams[7].market_id, 15);
+    assert!(streams[..4]
         .iter()
         .all(|stream| stream.duration_seconds == DURATION_5M_SECONDS));
-    assert!(streams[3..]
+    assert!(streams[4..]
         .iter()
         .all(|stream| stream.duration_seconds == DURATION_1M_SECONDS));
     assert_eq!(
@@ -307,19 +311,30 @@ fn default_phase_one_streams_are_btc_eth_sol_5m_and_1m() {
         "Binance Spot BTCUSDT 5m"
     );
     assert_eq!(
-        streams[3].settlement_source.to_string(),
+        streams[4].settlement_source.to_string(),
         "Binance Spot BTCUSDT 1m"
+    );
+    assert_eq!(
+        streams[7].settlement_source.to_string(),
+        "Binance Spot DOGEUSDT 1m"
     );
 }
 
 #[test]
-fn all_phases_include_thirteen_streams() {
+fn all_phases_include_fourteen_streams_without_legacy_doge_5m_id() {
     let streams = default_protocol_streams();
 
-    assert_eq!(streams.len(), 13);
-    assert_eq!(streams[12].market_id, 10);
-    assert_eq!(streams[12].asset, Asset::Doge);
-    assert_eq!(streams[12].duration_seconds, DURATION_15M_SECONDS);
+    assert_eq!(streams.len(), 14);
+    assert!(!streams.iter().any(|stream| stream.market_id == 8));
+    assert_eq!(streams[3].market_id, 14);
+    assert_eq!(streams[3].asset, Asset::Doge);
+    assert_eq!(streams[3].duration_seconds, DURATION_5M_SECONDS);
+    assert_eq!(streams[7].market_id, 15);
+    assert_eq!(streams[7].asset, Asset::Doge);
+    assert_eq!(streams[7].duration_seconds, DURATION_1M_SECONDS);
+    assert_eq!(streams[13].market_id, 10);
+    assert_eq!(streams[13].asset, Asset::Doge);
+    assert_eq!(streams[13].duration_seconds, DURATION_15M_SECONDS);
 }
 
 #[test]
@@ -341,7 +356,7 @@ fn existing_round_is_not_planned_again() {
 
     let plans = plan_round_openings(&streams, &existing, 1_700_000_123).unwrap();
 
-    assert_eq!(plans.len(), 5);
+    assert_eq!(plans.len(), 7);
     assert!(plans.iter().all(|plan| plan.market_id != 1));
 }
 
@@ -350,7 +365,7 @@ fn missing_current_rounds_get_open_plans() {
     let streams = protocol_stream_configs_for_phase(1).unwrap();
     let plans = plan_round_openings(&streams, &HashSet::new(), 1_700_000_123).unwrap();
 
-    assert_eq!(plans.len(), 6);
+    assert_eq!(plans.len(), 8);
     assert_eq!(plans[0].market_id, 1);
     assert_eq!(plans[0].asset, Asset::Btc);
     assert_eq!(
